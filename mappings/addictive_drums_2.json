@@ -1,0 +1,7 @@
+{
+  "plugin": "Addictive Drums 2",
+  "source": "General MIDI (GM Map Preset)",
+  "confidence": "high",
+  "map": {},
+  "notes": "Placeholder. AD2 ships a dedicated GM Map Preset for standard MIDI import."
+}

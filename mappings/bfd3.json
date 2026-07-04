@@ -1,0 +1,7 @@
+{
+  "plugin": "BFD3",
+  "source": "General MIDI (pre-loaded keymap)",
+  "confidence": "high",
+  "map": {},
+  "notes": "Placeholder. BFD3 lists General MIDI as a pre-loaded keymap option."
+}

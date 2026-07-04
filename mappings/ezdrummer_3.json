@@ -1,0 +1,7 @@
+{
+  "plugin": "EZdrummer 3",
+  "source": "General MIDI (built-in EZdrummer 3 keymap preset)",
+  "confidence": "high",
+  "map": {},
+  "notes": "Placeholder. EZdrummer 3 accepts GM MIDI via built-in mapping presets."
+}

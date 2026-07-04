@@ -1,0 +1,7 @@
+{
+  "plugin": "Superior Drummer 3",
+  "source": "General MIDI (built-in SD3 keymap preset)",
+  "confidence": "high",
+  "map": {},
+  "notes": "Placeholder. SD3 accepts GM MIDI directly via built-in mapping presets."
+}

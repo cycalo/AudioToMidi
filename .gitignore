@@ -1,0 +1,32 @@
+# Virtual environment
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# PyInstaller
+build/
+dist/
+
+# Downloaded separation checkpoints (keep folder via .gitkeep)
+models/*
+!models/.gitkeep
+
+# Real audio fixtures (may be large/copyrighted) - keep the dir, docs, and .gitkeep
+tests/fixtures/*.wav
+tests/fixtures/*.flac
+tests/fixtures/*.mp3
+tests/fixtures/**/*.wav
+tests/fixtures/**/*.mid
+tests/fixtures/*_stems*/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+Desktop.ini

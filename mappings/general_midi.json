@@ -1,0 +1,7 @@
+{
+  "plugin": "General MIDI",
+  "source": "internal canonical representation",
+  "confidence": "high",
+  "map": {},
+  "notes": "Placeholder. Canonical GM drum map will be populated in Phase 1/4."
+}
