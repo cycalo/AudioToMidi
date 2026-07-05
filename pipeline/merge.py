@@ -31,6 +31,7 @@ from pipeline.onset_detection import (  # noqa: E402
     detect_stem_events,
     min_ioi_by_note,
 )
+from pipeline.remap import load_profile, remap_events  # noqa: E402
 
 # Deterministic order in which stems are processed / merged.
 STEM_ORDER = ("kick", "snare", "toms", "hihat", "cymbals")
@@ -190,6 +191,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=DEFAULT_TEMPO,
         help=f"Initial tempo written to the MIDI file (default: {DEFAULT_TEMPO}).",
     )
+    parser.add_argument(
+        "--plugin",
+        default=None,
+        help=(
+            "Optional plugin profile (file stem or display name from mappings/) to "
+            "remap GM notes to the plugin's note numbers. Default: pure General MIDI."
+        ),
+    )
     return parser
 
 
@@ -205,6 +214,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         bleed_suppression=args.bleed_suppression,
         velocity_floor=args.velocity_floor,
     )
+
+    if args.plugin:
+        try:
+            profile = load_profile(args.plugin)
+        except (ValueError, FileNotFoundError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        events = remap_events(events, profile)
+        print(f"Remapped to plugin: {profile['plugin']} (confidence: {profile['confidence']})")
 
     output = args.output or args.stems_dir.with_suffix(".mid")
     write_midi(events, output, tempo=args.tempo)

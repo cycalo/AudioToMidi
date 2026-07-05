@@ -4,12 +4,14 @@ Convert a WAV drum stem into MIDI mapped for popular virtual drum plugins.
 
 ## Status
 
-**Phase 3** — full transcription pipeline (CLI). Runs per-stem onset detection
-with per-voice tuned parameters across the separated stems, clusters tom hits into
-floor + rack toms (GM 45/50), merges everything into one General MIDI timeline
-timeline (with double-trigger suppression and optional bleed handling), and
-writes a `.mid`. Builds on Phase 2 separation and the Phase 1 transcriber. The
-PySide6 window from Phase 0 still launches but is not yet wired to the pipeline.
+**Phase 4** — plugin-specific mapping layer (CLI). The transcription pipeline
+still emits clean General MIDI; a new thin, data-driven remap layer
+(`pipeline/remap.py`) translates those GM notes to a specific drum plugin's note
+numbers using JSON profiles in `mappings/`. Builds on the Phase 3 full pipeline
+(per-stem onset detection, floor/rack tom clustering, merge with double-trigger
+suppression and optional bleed handling), Phase 2 separation, and the Phase 1
+transcriber. The PySide6 window from Phase 0 still launches but is not yet wired
+to the pipeline.
 
 ## Requirements
 
@@ -99,9 +101,45 @@ Options:
   another stem (off by default).
 - `--velocity-floor N` drop hits below velocity `N` (default 0 = keep ghost notes).
 - `--tempo T` initial tempo written into the file.
+- `--plugin NAME` remap the output to a plugin profile in one step (see below).
+  Omit it for pure General MIDI.
 
 The full end-to-end path is: `separation.py` (WAV -> stems) then `merge.py`
 (stems -> GM `.mid`).
+
+## Remap General MIDI to a plugin's note numbers (CLI)
+
+Phase 4 keeps transcription plugin-agnostic (always GM) and applies a separate
+remap layer driven by JSON profiles in `mappings/`. Remap an existing GM `.mid`,
+or use `merge.py --plugin` to do it in one pass.
+
+```bash
+# List available plugin profiles and their confidence tiers
+python pipeline/remap.py --list
+
+# Remap a GM .mid to a plugin (accepts a file stem or the display name)
+python pipeline/remap.py drums.mid --plugin superior_drummer_3 -o drums_sd3.mid
+
+# ...or transcribe and remap in one step
+python pipeline/merge.py drums_stems --plugin ezdrummer_3 -o drums.mid
+```
+
+Only the notes this pipeline emits need coverage: `36` (kick), `38` (snare),
+`45` (floor tom), `50` (rack tom), `49` (crash), and `47` (single-cluster tom
+fallback). A GM note with no entry in a profile passes through unchanged (with a
+warning); hits are never dropped.
+
+Confidence tiers reflect how well each plugin's GM compatibility is documented,
+not output quality:
+
+- **high** — Superior Drummer 3, EZdrummer 3, Addictive Drums 2, BFD3: documented
+  built-in GM keymap presets, so the profiles are pass-through.
+- **medium** — Steven Slate Drums 5.5: not native GM; load the community Groove
+  Monkee GM IOMap in its Map tab so the pass-through profile lines up.
+- **low** — GetGood Drums (ships a "GM Mapping" preset but assignments vary per
+  library title — verify in the Mapping tab) and Drumforge (proprietary factory
+  map where GM 49/50 may hit the wrong piece — load a GM-compatible preset in its
+  Map page or remap toms/cymbals manually).
 
 ## Run tests
 

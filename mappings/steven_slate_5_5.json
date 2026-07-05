@@ -1,7 +1,14 @@
 {
   "plugin": "Steven Slate Drums 5.5",
-  "source": "community GM IOMap (Groove Monkee)",
+  "source": "Groove Monkee GM IOMap for SSD5.5 (community; https://groovemonkee.com/blogs/blog/how-to-use-the-free-version-of-ssd5-5)",
   "confidence": "medium",
-  "map": {},
-  "notes": "Placeholder. SSD5.5 does not ship GM natively; community IOMaps available."
+  "map": {
+    "36": 36,
+    "38": 38,
+    "45": 45,
+    "47": 47,
+    "49": 49,
+    "50": 50
+  },
+  "notes": "SSD5.5 is not native General MIDI. Load the Groove Monkee GM IOMap in SSD5.5's Map tab; this pass-through profile assumes that IOMap is active. Without it, GM notes will not trigger the expected pieces."
 }

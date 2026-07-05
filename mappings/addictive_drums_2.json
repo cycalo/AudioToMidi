@@ -1,7 +1,14 @@
 {
   "plugin": "Addictive Drums 2",
-  "source": "General MIDI (GM Map Preset)",
+  "source": "XLN Audio Addictive Drums 2 'GM' map preset (XLN documentation)",
   "confidence": "high",
-  "map": {},
-  "notes": "Placeholder. AD2 ships a dedicated GM Map Preset for standard MIDI import."
+  "map": {
+    "36": 36,
+    "38": 38,
+    "45": 45,
+    "47": 47,
+    "49": 49,
+    "50": 50
+  },
+  "notes": "AD2 ships a dedicated GM map preset; load it in AD2's Map window so GM notes trigger the expected articulations. Pass-through."
 }

@@ -1,7 +1,14 @@
 {
   "plugin": "GetGood Drums",
-  "source": "community reference (midiremap.com), best effort",
+  "source": "GGD 'GM Mapping' preset (GGD support docs; Munro Audio GGD MIDI Maps, https://www.munro-audio.com/midimaps)",
   "confidence": "low",
-  "map": {},
-  "notes": "Placeholder. GGD mapping varies per library title; verify against specific keymap."
+  "map": {
+    "36": 36,
+    "38": 38,
+    "45": 45,
+    "47": 47,
+    "49": 49,
+    "50": 50
+  },
+  "notes": "GGD ships a 'GM Mapping' preset (kick 36 / snare 38 are reliable), but tom and cymbal assignments vary per library title and the Groove Player uses a different internal map. Verify toms/cymbals in the library's Mapping tab and adjust if needed."
 }

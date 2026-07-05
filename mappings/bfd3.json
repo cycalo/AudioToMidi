@@ -1,7 +1,14 @@
 {
   "plugin": "BFD3",
-  "source": "General MIDI (pre-loaded keymap)",
+  "source": "inMusic BFD3 pre-loaded 'General MIDI' keymap",
   "confidence": "high",
-  "map": {},
-  "notes": "Placeholder. BFD3 lists General MIDI as a pre-loaded keymap option."
+  "map": {
+    "36": 36,
+    "38": 38,
+    "45": 45,
+    "47": 47,
+    "49": 49,
+    "50": 50
+  },
+  "notes": "BFD3 lists General MIDI as a pre-loaded keymap; select it so GM notes map correctly. Pass-through."
 }

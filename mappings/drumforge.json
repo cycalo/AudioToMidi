@@ -1,7 +1,14 @@
 {
   "plugin": "Drumforge",
-  "source": "community reference, best effort",
+  "source": "Drumforge Kontakt manual (proprietary factory map); no confident GM preset found",
   "confidence": "low",
-  "map": {},
-  "notes": "Placeholder. Drumforge has no public canonical map; best-effort starting point."
+  "map": {
+    "36": 36,
+    "38": 38,
+    "45": 45,
+    "47": 47,
+    "49": 49,
+    "50": 50
+  },
+  "notes": "Drumforge's factory map is proprietary: kick 36 and snare 38 match GM, but toms sit in a contiguous E1-A#1 cluster and crashes start around C3, so GM 50 (rack tom) and 49 (crash) may trigger the wrong piece. This pass-through is a best-effort default; load a GM-compatible preset in Drumforge's Map page or remap toms/cymbals manually."
 }
