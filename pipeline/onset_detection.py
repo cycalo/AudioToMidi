@@ -6,8 +6,8 @@ per-onset peak amplitude against the loudest/quietest hits in the same file.
 Runnable as a CLI that writes a General MIDI ``.mid``.
 
 Phase 3: per-stem tuned onset detection (band-limited envelopes + per-voice
-peak-picking thresholds) and adaptive tom pitch clustering (choose 2 or 3
-clusters per file via silhouette comparison, mapped to low/mid/high tom notes).
+peak-picking thresholds) and tom pitch clustering into floor + rack toms (2
+clusters per file, mapped to GM low/high tom notes).
 """
 
 from __future__ import annotations
@@ -39,8 +39,13 @@ MAX_VELOCITY = 127
 
 Event = Tuple[float, int, int]
 
-# General MIDI tom notes (low, mid, high), per Section 5.1.
-TOM_NOTES = (45, 47, 50)
+# General MIDI tom notes emitted by the pipeline: floor (low pitch) and rack
+# (high pitch), per Section 5.1. Mid tom (47) is only used as a fallback when
+# the stem has a single usable pitch cluster.
+TOM_NOTES = (45, 50)
+TOM_NOTE_FLOOR = 45  # Low Tom — lower-pitch cluster (floor tom)
+TOM_NOTE_RACK = 50  # High Tom — higher-pitch cluster (rack tom)
+TOM_NOTE_FALLBACK = 47  # Low-Mid Tom — single cluster when split is unreliable
 
 # Tom pitch estimation window: skip the broadband attack click, then measure a
 # short sustain segment. Range brackets typical tom fundamentals.
@@ -49,9 +54,9 @@ TOM_PITCH_WIN_MS = 80.0
 TOM_PITCH_FMIN = 60.0
 TOM_PITCH_FMAX = 400.0
 
-# Adaptive k selection: prefer k=2 unless k=3's silhouette beats it by the
-# margin, and collapse to a single tom if the best split is too weak.
-SILHOUETTE_MARGIN = 0.05
+# Two-tom clustering: require at least this pitch spread (semitones) and
+# silhouette score before accepting a floor/rack split; otherwise k=1.
+MIN_PITCH_SPREAD_SEMITONES = 1.0
 SILHOUETTE_FLOOR = 0.5
 
 
@@ -207,7 +212,7 @@ def detect_onsets_for_stem(
 
 
 # --------------------------------------------------------------------------
-# Phase 3: tom pitch estimation + adaptive clustering
+# Phase 3: tom pitch estimation + floor/rack clustering
 # --------------------------------------------------------------------------
 def _hz_to_semitones(hz: float) -> float:
     """Convert a frequency in Hz to a MIDI-style semitone value (log scale)."""
@@ -272,20 +277,19 @@ def estimate_tom_pitches(
 
 
 def cluster_toms(pitches: Sequence[float]) -> Tuple[List[int], int]:
-    """Adaptively cluster tom pitches into low/mid/high notes.
+    """Cluster tom pitches into floor + rack toms (2 groups).
 
-    Runs k-means at k=2 and (when there are enough hits) k=3 over the usable
-    per-onset pitches, compares silhouette scores, and picks the k that best fits
-    the file's pitch spread (preferring k=2 unless k=3 wins by ``SILHOUETTE_MARGIN``,
-    and collapsing to a single tom when the best split is weaker than
-    ``SILHOUETTE_FLOOR`` or there is only one usable pitch). Clusters are mapped by
-    ascending center pitch to GM tom notes: k=3 -> 45/47/50, k=2 -> 45/50, k=1 -> 47.
+    Estimates per-onset pitch, then runs k-means with ``k=2`` over the usable
+    pitches in that file. The lower cluster maps to the floor tom (GM 45) and
+    the higher cluster to the rack tom (GM 50). If there is only one usable
+    pitch, negligible spread, or the k=2 split scores below ``SILHOUETTE_FLOOR``,
+    all hits collapse to a single fallback note (GM 47).
 
-    Returns ``(notes_per_onset, k)`` where ``notes_per_onset`` aligns with the input.
+    Returns ``(notes_per_onset, k)`` where ``k`` is 2, 1, or 0 (no onsets).
     """
     pitches = np.asarray(pitches, dtype=float)
     n = pitches.size
-    notes = np.full(n, 47, dtype=int)
+    notes = np.full(n, TOM_NOTE_FALLBACK, dtype=int)
     if n == 0:
         return notes.tolist(), 0
 
@@ -295,40 +299,26 @@ def cluster_toms(pitches: Sequence[float]) -> Tuple[List[int], int]:
         return notes.tolist(), 0
 
     spread = float(usable.max() - usable.min())
-    if usable.size == 1 or spread < 1.0:
+    if usable.size == 1 or spread < MIN_PITCH_SPREAD_SEMITONES:
         return notes.tolist(), 1
 
     from sklearn.cluster import KMeans
     from sklearn.metrics import silhouette_score
 
     features = usable.reshape(-1, 1)
-    scores: Dict[int, float] = {}
-    fitted: Dict[int, "KMeans"] = {}
-    candidates = [2] + ([3] if usable.size >= 4 else [])
-    for k in candidates:
-        model = KMeans(n_clusters=k, n_init=10, random_state=0).fit(features)
-        if len(set(model.labels_)) < k:
-            continue
-        scores[k] = float(silhouette_score(features, model.labels_))
-        fitted[k] = model
-
-    if not scores:
+    model = KMeans(n_clusters=2, n_init=10, random_state=0).fit(features)
+    if len(set(model.labels_)) < 2:
         return notes.tolist(), 1
 
-    if 2 in scores and 3 in scores:
-        chosen = 3 if scores[3] >= scores[2] + SILHOUETTE_MARGIN else 2
-    else:
-        chosen = max(scores, key=scores.get)
-
-    if scores[chosen] < SILHOUETTE_FLOOR:
+    score = float(silhouette_score(features, model.labels_))
+    if score < SILHOUETTE_FLOOR:
         return notes.tolist(), 1
 
-    model = fitted[chosen]
     centers = model.cluster_centers_.ravel()
-    order = list(np.argsort(centers))  # cluster labels sorted by ascending pitch
-    rank_of_label = {label: rank for rank, label in enumerate(order)}
-    note_by_rank = {2: [45, 50], 3: [45, 47, 50]}[chosen]
-    usable_notes = [note_by_rank[rank_of_label[label]] for label in model.labels_]
+    low_label = int(np.argmin(centers))
+    high_label = int(np.argmax(centers))
+    label_to_note = {low_label: TOM_NOTE_FLOOR, high_label: TOM_NOTE_RACK}
+    usable_notes = [label_to_note[label] for label in model.labels_]
 
     fill = max(set(usable_notes), key=usable_notes.count)
     result: List[int] = []
@@ -339,7 +329,7 @@ def cluster_toms(pitches: Sequence[float]) -> Tuple[List[int], int]:
             ui += 1
         else:
             result.append(fill)
-    return result, chosen
+    return result, 2
 
 
 def assign_tom_notes(
@@ -355,7 +345,7 @@ def min_ioi_by_note() -> Dict[int, float]:
     mapping: Dict[int, float] = {}
     for preset in STEM_PRESETS.values():
         if preset.name == "toms":
-            for note in TOM_NOTES:
+            for note in (*TOM_NOTES, TOM_NOTE_FALLBACK):
                 mapping[note] = preset.min_ioi_ms
         elif preset.gm_note is not None:
             mapping[preset.gm_note] = preset.min_ioi_ms
@@ -370,7 +360,7 @@ def detect_stem_events(
 ) -> Tuple[List[Event], dict]:
     """Detect events for one separated stem, assigning GM notes.
 
-    For toms, notes are assigned by adaptive pitch clustering; for other stems the
+    For toms, notes are assigned by floor/rack pitch clustering; for other stems the
     preset's fixed GM note is used. Returns ``(events, info)`` where ``info`` holds
     the stem name, onset count, and (for toms) the chosen cluster count ``tom_k``.
     """

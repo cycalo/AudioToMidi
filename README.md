@@ -5,8 +5,8 @@ Convert a WAV drum stem into MIDI mapped for popular virtual drum plugins.
 ## Status
 
 **Phase 3** — full transcription pipeline (CLI). Runs per-stem onset detection
-with per-voice tuned parameters across the separated stems, adaptively clusters
-tom hits into low/mid/high notes, merges everything into one General MIDI
+with per-voice tuned parameters across the separated stems, clusters tom hits into
+floor + rack toms (GM 45/50), merges everything into one General MIDI timeline
 timeline (with double-trigger suppression and optional bleed handling), and
 writes a `.mid`. Builds on Phase 2 separation and the Phase 1 transcriber. The
 PySide6 window from Phase 0 still launches but is not yet wired to the pipeline.
@@ -90,7 +90,7 @@ What it does:
 - Detects onsets per stem with per-voice tuned settings (kick/snare use a low
   threshold; cymbals use a higher threshold and longer wait to avoid retriggering
   on the decay wash).
-- Splits the toms stem by pitch, adaptively choosing 2 or 3 tom notes per file.
+- Splits the toms stem by pitch into floor tom (GM 45) and rack tom (GM 50).
 - Merges into one timeline with a per-voice minimum inter-onset interval.
 
 Options:

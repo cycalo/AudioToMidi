@@ -43,15 +43,14 @@ python pipeline/merge.py tests/fixtures/drums_1_stems -o tests/fixtures/drums_1.
 
 Observations on the four demucs fixtures (default settings, bleed suppression off):
 
-| Fixture | Events | kick(36) | snare(38) | toms(45/47/50) | cymbals(49) | tom k |
+| Fixture | Events | kick(36) | snare(38) | toms(45/50) | cymbals(49) | tom k |
 |---|---|---|---|---|---|---|
-| drums_1 | 175 | 43 | 39 | 37/0/25 | 31 | 2 |
-| drums_2 | 339 | 92 | 101 | 63/0/36 | 47 | 2 |
-| drums_3 | 214 | 52 | 50 | 30/0/15 | 67 | 2 |
-| drums_4 | 221 | 61 | 58 | 17/0/19 | 66 | 2 |
+| drums_1 | 175 | 43 | 39 | 37/25 | 31 | 2 |
+| drums_2 | 339 | 92 | 101 | 63/36 | 47 | 2 |
+| drums_3 | 214 | 52 | 50 | 30/15 | 67 | 2 |
+| drums_4 | 221 | 61 | 58 | 17/19 | 66 | 2 |
 
-- All four resolved toms to k=2 (low 45 + high 50), so mid tom (47) is unused; the
-  adaptive selector preferred 2 clusters over 3 in every case.
+- All four use k=2 floor/rack tom clustering (GM 45 low + GM 50 high).
 - Tom onset counts run high, consistent with cymbal/snare bleed into the toms stem
   (Section 7 known limitation). Enable `--bleed-suppression` or raise
   `--velocity-floor` to trim it once validated by ear.

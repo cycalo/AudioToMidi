@@ -19,9 +19,9 @@ A single WAV containing the whole kit needs to be split into per-instrument stem
 - Across all of these, kick separates cleanest, snare is moderate, and toms/cymbals are the weakest link because of their broad/overlapping frequency content. Plan the UI and QA process around this reality (see Section 7).
 
 ### 1.2.1 Splitting the toms stem by pitch
-Source separation gives you one "toms" stem, not one stem per tom, so a second, cheaper step is needed on top of it: for each detected onset in the toms stem, estimate the pitch of that hit (a short pitch/fundamental-frequency estimate right after the transient, e.g. via `librosa.pyin` or autocorrelation, skipping the initial broadband click) and cluster the results into low/mid/high. Use **relative clustering** over the pitches found in that specific file rather than fixed frequency thresholds, since tom tuning varies enormously between kits. Rather than forcing a fixed `k=3`, **decide the number of clusters adaptively per stem**: run k-means at both `k=2` and `k=3` on the per-onset pitch estimates, compare cluster separation (e.g. `silhouette_score`, or the relative gap between cluster centers), and pick whichever better fits that stem's actual pitch spread (preferring `k=2` unless `k=3` wins by a clear margin, and collapsing to a single group when there is only one usable pitch or negligible spread). This keeps the split working whether the kit has 2 toms or 5 — a 2-tom kit gets 2 clusters instead of a spurious third — at the cost of not guaranteeing "low tom" always means the same absolute pitch across different songs. Flag this as a v1 simplification (see Section 7).
+Source separation gives you one "toms" stem, not one stem per tom, so a second, cheaper step is needed on top of it: for each detected onset in the toms stem, estimate the pitch of that hit (a short pitch/fundamental-frequency estimate right after the transient, e.g. via `librosa.pyin` or autocorrelation, skipping the initial broadband click) and cluster the results into **floor tom + rack tom** (two groups). Use **relative clustering** (k-means with `k=2` over the pitches found in that specific file) rather than fixed frequency thresholds, since tom tuning varies enormously between kits. The lower-pitch cluster maps to the floor tom and the higher-pitch cluster to the rack tom. If pitch spread is negligible or the split scores poorly (silhouette below a floor), collapse to a single generic tom note rather than forcing a spurious second cluster. This matches how most kits are miked (floor + rack toms) without inventing a third mid-tom bucket. "Low tom" in one song still isn't guaranteed to match the same physical drum as "low tom" in another — flag this as a v1 simplification (see Section 7).
 
-The same clustering idea does **not** get applied to cymbals: cymbal decay/timbre differences (crash vs ride vs splash) aren't a clean pitch axis the way toms are, which is why cymbals stay lumped into one bucket for v1 while toms get split three ways.
+The same clustering idea does **not** get applied to cymbals: cymbal decay/timbre differences (crash vs ride vs splash) aren't a clean pitch axis the way toms are, which is why cymbals stay lumped into one bucket for v1 while toms get split into floor + rack.
 
 ### 1.3 General MIDI vs plugin-specific mapping
 This turned out to be the single most important finding for the architecture. Every major plugin researched treats **General MIDI as a common interchange format**, not just Superior Drummer 3/EZdrummer 3:
@@ -66,7 +66,7 @@ WAV drum stem
 [3] Per-stem onset detection (madmom/librosa, tuned per drum type)
      │
      ▼
-[3a] Toms-only: per-onset pitch estimate + cluster into high/mid/low tom
+[3a] Toms-only: per-onset pitch estimate + cluster into floor/rack tom (k=2)
      │
      ▼
 [4] Velocity extraction (amplitude at transient → MIDI velocity curve)
@@ -151,7 +151,7 @@ drum-stem-to-midi/
 | 46 | Open Hi-Hat | 57 | Crash Cymbal 2 |
 | 37 | Side Stick | 59 | Ride Cymbal 2 |
 
-**Tom assignment**: the 3-way pitch cluster from Section 1.2.1 maps to `low → 45 (Low Tom)`, `mid → 47 (Low-Mid Tom)`, `high → 50 (High Tom)`. Cymbal stem defaults to `49 (Crash Cymbal 1)` as the single representative note for v1, per Section 1.2.1.
+**Tom assignment**: the 2-way pitch cluster from Section 1.2.1 maps to `lower cluster → 45 (Low Tom / floor tom)`, `higher cluster → 50 (High Tom / rack tom)`. When only one cluster is used, hits map to `47 (Low-Mid Tom)` as a generic fallback. Cymbal stem defaults to `49 (Crash Cymbal 1)` as the single representative note for v1, per Section 1.2.1.
 
 ### 5.2 Per-plugin JSON profile format
 ```json
@@ -212,7 +212,7 @@ Mark each profile's `confidence` field (`high` / `medium` / `low`) and surface i
 
 ### Phase 3 — Full pipeline: multi-stem onset detection, merge, overlap/bleed handling
 - Run Phase 1's onset detector against each separated stem from Phase 2, with per-stem tuned parameters (cymbals/hihat need different onset backend settings than kick/snare, per Section 1.1).
-- For the toms stem specifically: after onsets are found, run pitch estimation on each hit and adaptively choose 2 or 3 clusters via silhouette comparison (Section 1.2.1), then map the clusters (ascending by center pitch) to low/mid/high tom notes before it goes into the merge step.
+- For the toms stem specifically: after onsets are found, run pitch estimation on each hit and cluster into floor + rack toms (`k=2`, Section 1.2.1), mapping the lower cluster to GM 45 and the higher to GM 50 before it goes into the merge step.
 - Build `pipeline/merge.py`:
   - Merge all stems' onsets into one sorted timeline.
   - Apply a minimum inter-onset interval per voice (~30-40ms) to suppress double-triggers from decay/ringing.
@@ -243,7 +243,7 @@ Mark each profile's `confidence` field (`high` / `medium` / `low`) and surface i
 - **Toms and cymbals separate worse than kick/snare.** Expect more manual cleanup needed on busy fills and cymbal-heavy passages regardless of which separation model is used, this is a known limit of current source separation research, not a bug to chase indefinitely.
 - **GGD and Drumforge mappings are genuinely not standardized** across their own product lines. Treat the shipped JSON profiles as a documented starting point, not a guarantee, and make that visible in the UI.
 - **CPU-only inference will be slow** for Demucs-based separation on longer stems. Set expectations in the UI (a progress bar with an honest time estimate) rather than letting the app appear frozen.
-- **Tom clustering is relative, not absolute.** Because low/mid/high tom is decided by k-means/percentile over pitches found in that one file, a kit with only 2 toms will still get split into 3 buckets (one will just be sparsely populated or a near-duplicate of a neighbor), and "low tom" in one song isn't guaranteed to match the same physical drum as "low tom" in another. Fine for v1; a per-kit calibration step is a reasonable post-MVP improvement.
+- **Tom clustering is relative, not absolute.** Floor vs rack tom is decided by k-means over pitches found in that one file (always targeting two clusters). A kit with only one tom in the stem may collapse to a single note, and "floor tom" in one song isn't guaranteed to match the same physical drum as "floor tom" in another. Fine for v1; a per-kit calibration step is a reasonable post-MVP improvement.
 - **Tempo/quantization is out of scope for MVP.** The plan above outputs note events at their literal detected times; tempo detection and quantization-to-grid is a reasonable Phase 7 addition later, not a blocker for a usable v1.
 
 ## 8. Post-MVP Roadmap

@@ -114,7 +114,7 @@ def transcribe_stems(
     """Transcribe a Phase 2 separated-stems directory into merged GM events.
 
     Reads ``manifest.json`` when present (else falls back to known ``<stem>.wav``
-    files), runs per-stem onset detection with adaptive tom clustering, merges,
+    files), runs per-stem onset detection with floor/rack tom clustering, merges,
     and returns ``(events, summary)``.
     """
     stems_path = Path(stems_dir)

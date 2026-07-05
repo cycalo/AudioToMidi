@@ -1,4 +1,4 @@
-"""Phase 3 tests: adaptive tom clustering, merge logic, and full-pipeline runs.
+"""Phase 3 tests: floor/rack tom clustering, merge logic, and full-pipeline runs.
 
 Unit tests use deterministic synthetic inputs. The real-fixture tests run the
 full stems-to-MIDI pipeline against the Phase 2 Demucs output in
@@ -20,7 +20,13 @@ if str(REPO_ROOT) not in sys.path:
 
 from pipeline.merge import merge_events, transcribe_stems  # noqa: E402
 from pipeline.midi_writer import write_midi  # noqa: E402
-from pipeline.onset_detection import TOM_NOTES, cluster_toms  # noqa: E402
+from pipeline.onset_detection import (  # noqa: E402
+    TOM_NOTE_FALLBACK,
+    TOM_NOTE_FLOOR,
+    TOM_NOTE_RACK,
+    TOM_NOTES,
+    cluster_toms,
+)
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -30,29 +36,28 @@ def _stem_dirs() -> list[Path]:
 
 
 # --------------------------------------------------------------------------
-# Adaptive tom clustering
+# Floor/rack tom clustering (fixed k=2)
 # --------------------------------------------------------------------------
-def test_cluster_toms_three_groups() -> None:
-    # Three clearly separated pitch groups (semitones).
+def test_cluster_toms_three_pitch_groups_map_to_two_toms() -> None:
+    # Three pitch groups still resolve to floor + rack (k=2), not three notes.
     pitches = [40.0, 40.2, 47.0, 47.1, 55.0, 55.3]
     notes, k = cluster_toms(pitches)
-    assert k == 3
+    assert k == 2
     assert set(notes) == set(TOM_NOTES)
-    # Ascending pitch -> ascending note.
-    assert notes[0] == 45 and notes[2] == 47 and notes[4] == 50
+    assert notes[0] == TOM_NOTE_FLOOR and notes[-1] == TOM_NOTE_RACK
 
 
 def test_cluster_toms_two_groups() -> None:
     pitches = [41.0, 41.2, 41.1, 54.0, 54.2, 54.1]
     notes, k = cluster_toms(pitches)
     assert k == 2
-    assert set(notes) == {45, 50}
+    assert set(notes) == set(TOM_NOTES)
 
 
 def test_cluster_toms_single_pitch() -> None:
     notes, k = cluster_toms([48.0, 48.05, 47.98])
     assert k == 1
-    assert set(notes) == {47}
+    assert set(notes) == {TOM_NOTE_FALLBACK}
 
 
 def test_cluster_toms_empty() -> None:
@@ -66,7 +71,7 @@ def test_cluster_toms_unvoiced_filled() -> None:
     pitches = [40.0, np.nan, 55.0, 55.1, 40.1]
     notes, k = cluster_toms(pitches)
     assert len(notes) == len(pitches)
-    assert all(n in TOM_NOTES for n in notes)
+    assert all(n in set(TOM_NOTES) | {TOM_NOTE_FALLBACK} for n in notes)
 
 
 # --------------------------------------------------------------------------
@@ -139,7 +144,7 @@ def test_pipeline_real_stems(tmp_path: Path) -> None:
     assert 36 in notes_present, "kick missing"
     assert 38 in notes_present, "snare missing"
     assert 49 in notes_present, "cymbals missing"
-    assert notes_present & set(TOM_NOTES), "no tom notes"
+    assert notes_present & (set(TOM_NOTES) | {TOM_NOTE_FALLBACK}), "no tom notes"
 
     # Per-voice min-IOI respected (kick/snare 30 ms).
     for target, gap in ((36, 0.030), (38, 0.030)):
