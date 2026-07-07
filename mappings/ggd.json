@@ -1,14 +1,14 @@
 {
   "plugin": "GetGood Drums",
-  "source": "GGD 'GM Mapping' preset (GGD support docs; Munro Audio GGD MIDI Maps, https://www.munro-audio.com/midimaps)",
-  "confidence": "low",
+  "source": "Verified against GGD Modern & Massive 'GM' preset (Mapping tab, user-confirmed July 2026)",
+  "confidence": "medium",
   "map": {
     "36": 36,
     "38": 38,
-    "45": 45,
-    "47": 47,
+    "45": 43,
+    "47": 43,
     "49": 49,
     "50": 50
   },
-  "notes": "GGD ships a 'GM Mapping' preset (kick 36 / snare 38 are reliable), but tom and cymbal assignments vary per library title and the Groove Player uses a different internal map. Verify toms/cymbals in the library's Mapping tab and adjust if needed."
+  "notes": "Verified against Modern & Massive only: select the 'GM' mapping preset in the plugin (not Halpern or the default 'GGD' preset). Kick/snare/crash/rack tom match exactly (36/38/49/50). Our floor tom (45) and single-tom fallback (47) both remap to 43 (Floor Tom 1) — a judgment call: GGD's GM preset also has Floor Tom 2 at 41, but this pipeline emits at most two tom voices and cannot distinguish more than floor vs rack. Other GGD library titles may place floor toms differently; verify in the Mapping tab."
 }

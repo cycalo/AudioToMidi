@@ -32,6 +32,38 @@ def test_main_window_constructs(qapp: QApplication) -> None:
     assert window.windowTitle() == "Drum Stem to MIDI"
 
 
+def test_main_window_has_phase5_widgets(qapp: QApplication) -> None:
+    """The Phase 5 controls exist and start in the expected disabled state."""
+    window = MainWindow()
+    assert window.browse_btn is not None
+    assert window.convert_btn is not None
+    assert window.save_btn is not None
+    # Save + sensitivity are disabled until an analysis has run.
+    assert not window.save_btn.isEnabled()
+    assert not window.sensitivity_slider.isEnabled()
+    # Convert is disabled until a WAV is chosen.
+    assert not window.convert_btn.isEnabled()
+
+
+def test_plugin_combo_lists_seven_profiles(qapp: QApplication) -> None:
+    """The dropdown surfaces the 7 plugin profiles (general_midi excluded)."""
+    window = MainWindow()
+    assert window.plugin_combo.count() == 7
+    stems = {window.plugin_combo.itemData(i) for i in range(window.plugin_combo.count())}
+    assert "general_midi" not in stems
+    assert "superior_drummer_3" in stems
+    assert "drumforge" in stems
+
+
+def test_waveform_view_constructs(qapp: QApplication) -> None:
+    """WaveformView instantiates and its clear() is safe on an empty plot."""
+    from app.ui.waveform_view import WaveformView
+
+    view = WaveformView()
+    view.clear()
+    view.set_events([])
+
+
 def test_main_module_importable() -> None:
     """Entry point module imports without error."""
     import app.main  # noqa: F401

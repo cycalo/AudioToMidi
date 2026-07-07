@@ -111,12 +111,14 @@ def transcribe_stems(
     *,
     bleed_suppression: bool = False,
     velocity_floor: int = 0,
+    delta_scale: float = 1.0,
 ) -> Tuple[List[Event], dict]:
     """Transcribe a Phase 2 separated-stems directory into merged GM events.
 
     Reads ``manifest.json`` when present (else falls back to known ``<stem>.wav``
     files), runs per-stem onset detection with floor/rack tom clustering, merges,
-    and returns ``(events, summary)``.
+    and returns ``(events, summary)``. ``delta_scale`` tunes onset sensitivity
+    across all stems (see ``detect_onsets_for_stem``).
     """
     stems_path = Path(stems_dir)
     manifest_path = stems_path / "manifest.json"
@@ -139,7 +141,7 @@ def transcribe_stems(
         path = stem_files.get(name)
         if path is None or not path.exists():
             continue
-        events, info = detect_stem_events(str(path), name)
+        events, info = detect_stem_events(str(path), name, delta_scale=delta_scale)
         stem_events[name] = events
         summary["stems"][name] = info
         if name == "toms":
@@ -192,6 +194,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help=f"Initial tempo written to the MIDI file (default: {DEFAULT_TEMPO}).",
     )
     parser.add_argument(
+        "--delta-scale",
+        type=float,
+        default=1.0,
+        help=(
+            "Onset sensitivity multiplier over the tuned per-stem thresholds "
+            "(default 1.0; <1 detects more hits, >1 fewer; clamped 0.25-2.0)."
+        ),
+    )
+    parser.add_argument(
         "--plugin",
         default=None,
         help=(
@@ -213,6 +224,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         str(args.stems_dir),
         bleed_suppression=args.bleed_suppression,
         velocity_floor=args.velocity_floor,
+        delta_scale=args.delta_scale,
     )
 
     if args.plugin:

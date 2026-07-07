@@ -59,6 +59,11 @@ TOM_PITCH_FMAX = 400.0
 MIN_PITCH_SPREAD_SEMITONES = 1.0
 SILHOUETTE_FLOOR = 0.5
 
+# Interactive sensitivity: multiply a stem preset's peak-picking delta. 1.0 is
+# the tuned default; below 1 detects more (quieter) onsets, above 1 fewer.
+DELTA_SCALE_MIN = 0.25
+DELTA_SCALE_MAX = 2.0
+
 
 @dataclass(frozen=True)
 class StemPreset:
@@ -193,17 +198,24 @@ def detect_onsets_for_stem(
     preset: StemPreset,
     *,
     hop_length: int = DEFAULT_HOP_LENGTH,
+    delta_scale: float = 1.0,
 ) -> np.ndarray:
-    """Detect onset times (seconds) in one drum stem using its tuned preset."""
+    """Detect onset times (seconds) in one drum stem using its tuned preset.
+
+    ``delta_scale`` multiplies the preset's peak-picking threshold for
+    interactive sensitivity tuning: values > 1 detect fewer (only stronger)
+    onsets, values < 1 detect more. It is clamped to ``DELTA_SCALE_RANGE``.
+    """
     if y.size == 0:
         return np.array([], dtype=float)
+    scale = float(min(max(delta_scale, DELTA_SCALE_MIN), DELTA_SCALE_MAX))
     envelope = _band_onset_envelope(y, sr, preset.fmin, preset.fmax, hop_length)
     wait = max(1, int(round(preset.wait_ms / 1000.0 * sr / hop_length)))
     frames = librosa.onset.onset_detect(
         onset_envelope=envelope,
         sr=sr,
         hop_length=hop_length,
-        delta=preset.delta,
+        delta=preset.delta * scale,
         wait=wait,
         backtrack=True,
         units="frames",
@@ -357,11 +369,13 @@ def detect_stem_events(
     stem_name: str,
     *,
     window_ms: float = DEFAULT_WINDOW_MS,
+    delta_scale: float = 1.0,
 ) -> Tuple[List[Event], dict]:
     """Detect events for one separated stem, assigning GM notes.
 
     For toms, notes are assigned by floor/rack pitch clustering; for other stems the
-    preset's fixed GM note is used. Returns ``(events, info)`` where ``info`` holds
+    preset's fixed GM note is used. ``delta_scale`` tunes onset sensitivity (see
+    ``detect_onsets_for_stem``). Returns ``(events, info)`` where ``info`` holds
     the stem name, onset count, and (for toms) the chosen cluster count ``tom_k``.
     """
     preset = STEM_PRESETS.get(stem_name)
@@ -369,7 +383,7 @@ def detect_stem_events(
         return [], {"stem": stem_name, "onsets": 0, "tom_k": None, "skipped": True}
 
     y, sr = load_audio(path)
-    onset_times = detect_onsets_for_stem(y, sr, preset)
+    onset_times = detect_onsets_for_stem(y, sr, preset, delta_scale=delta_scale)
     velocities = extract_velocities(y, sr, onset_times, window_ms=window_ms)
 
     if stem_name == "toms":

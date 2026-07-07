@@ -39,6 +39,7 @@ PLUGIN_PROFILES = (
     "drumforge",
 )
 ALL_PROFILES = PLUGIN_PROFILES + ("general_midi",)
+PASS_THROUGH_PROFILES = tuple(p for p in ALL_PROFILES if p != "ggd")
 
 VALID_CONFIDENCE = {"high", "medium", "low"}
 
@@ -61,11 +62,22 @@ def test_profile_covers_produced_notes_with_int_values(name):
     assert all(isinstance(k, int) and isinstance(v, int) for k, v in note_map.items())
 
 
-@pytest.mark.parametrize("name", ALL_PROFILES)
+@pytest.mark.parametrize("name", PASS_THROUGH_PROFILES)
 def test_shipped_profiles_are_pass_through(name):
-    # Phase 4 v1: every shipped profile maps each produced note to itself.
     note_map = load_profile(name)["map"]
     assert all(src == dst for src, dst in note_map.items())
+
+
+def test_ggd_profile_maps_floor_toms_to_modern_massive_floor_tom_1():
+    """GGD is verified for Modern & Massive GM: floor/fallback toms -> note 43."""
+    note_map = load_profile("ggd")["map"]
+    assert note_map[36] == 36
+    assert note_map[38] == 38
+    assert note_map[49] == 49
+    assert note_map[50] == 50
+    assert note_map[45] == 43
+    assert note_map[47] == 43
+    assert load_profile("ggd")["confidence"] == "medium"
 
 
 def test_load_profile_by_display_name():

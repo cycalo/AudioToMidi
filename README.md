@@ -4,14 +4,13 @@ Convert a WAV drum stem into MIDI mapped for popular virtual drum plugins.
 
 ## Status
 
-**Phase 4** — plugin-specific mapping layer (CLI). The transcription pipeline
-still emits clean General MIDI; a new thin, data-driven remap layer
-(`pipeline/remap.py`) translates those GM notes to a specific drum plugin's note
-numbers using JSON profiles in `mappings/`. Builds on the Phase 3 full pipeline
-(per-stem onset detection, floor/rack tom clustering, merge with double-trigger
-suppression and optional bleed handling), Phase 2 separation, and the Phase 1
-transcriber. The PySide6 window from Phase 0 still launches but is not yet wired
-to the pipeline.
+**Phase 5** — desktop GUI (PySide6). The full pipeline now runs from a window:
+pick a WAV, choose a target plugin (annotated by mapping confidence), click
+Convert to separate and transcribe in the background, review the detected onsets
+on a waveform, tune detection sensitivity with a slider, then Save the
+plugin-mapped MIDI. Builds on the Phase 4 remap layer, the Phase 3 full pipeline
+(per-stem onset detection, floor/rack tom clustering, merge), and Phase 2
+separation. The CLI tools from earlier phases still work standalone.
 
 ## Requirements
 
@@ -26,11 +25,30 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-## Run from source
+## Run the app (GUI)
 
 ```bash
 python app/main.py
 ```
+
+The window drives the whole pipeline in two steps:
+
+1. Browse to a drum-stem WAV and pick a target plugin from the dropdown. Plugins
+   with medium/low mapping confidence show an inline note (see the remap section
+   for what the tiers mean).
+2. Click **Convert**. Separation and onset detection run on a background thread
+   with a staged progress bar, so the window stays responsive. When it finishes,
+   the waveform shows color-coded onset markers (kick/snare/toms/cymbals).
+3. Drag the **sensitivity** slider to re-run detection live (fast — it reuses the
+   already-separated stems). Left detects only the strongest hits; right detects
+   more, quieter hits.
+4. Click **Save MIDI...** to write the plugin-remapped `.mid`.
+
+Expected wait for Convert: separation dominates and is CPU-bound. A ~30s clip
+typically takes roughly 15-50s on a CPU without a GPU (onset detection, merge,
+and remap together add well under 2s). The first ever run also downloads a
+one-time ~167 MB separation model. Live sensitivity re-runs take under a second
+since they skip separation.
 
 ## Transcribe a drum voice to MIDI (CLI)
 
@@ -100,6 +118,9 @@ Options:
 - `--bleed-suppression` drop a quiet onset coincident with a much louder hit in
   another stem (off by default).
 - `--velocity-floor N` drop hits below velocity `N` (default 0 = keep ghost notes).
+- `--delta-scale S` onset sensitivity multiplier over the tuned thresholds
+  (default 1.0; below 1 detects more hits, above 1 fewer; clamped 0.25-2.0). This
+  is the same knob the GUI sensitivity slider drives.
 - `--tempo T` initial tempo written into the file.
 - `--plugin NAME` remap the output to a plugin profile in one step (see below).
   Omit it for pure General MIDI.
