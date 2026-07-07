@@ -4,13 +4,14 @@ Convert a WAV drum stem into MIDI mapped for popular virtual drum plugins.
 
 ## Status
 
-**Phase 5** — desktop GUI (PySide6). The full pipeline now runs from a window:
-pick a WAV, choose a target plugin (annotated by mapping confidence), click
-Convert to separate and transcribe in the background, review the detected onsets
-on a waveform, tune detection sensitivity with a slider, then Save the
-plugin-mapped MIDI. Builds on the Phase 4 remap layer, the Phase 3 full pipeline
+**Phase 5** — desktop GUI (PySide6). The full pipeline runs from a window: pick a
+WAV, choose a target plugin (dropdown labels and inline hints come from each
+profile's JSON in `mappings/`), click **Convert** to separate and transcribe in
+the background, review detected onsets on a waveform, optionally tune sensitivity,
+then **Save MIDI**. Builds on the Phase 4 remap layer, Phase 3 transcription
 (per-stem onset detection, floor/rack tom clustering, merge), and Phase 2
-separation. The CLI tools from earlier phases still work standalone.
+separation. CLI tools from earlier phases still work standalone. Phase 6
+(PyInstaller packaging) is not yet done.
 
 ## Requirements
 
@@ -31,24 +32,33 @@ pip install -r requirements.txt
 python app/main.py
 ```
 
-The window drives the whole pipeline in two steps:
+The window drives the pipeline in two steps (**Convert**, then **Save MIDI**):
 
-1. Browse to a drum-stem WAV and pick a target plugin from the dropdown. Plugins
-   with medium/low mapping confidence show an inline note (see the remap section
-   for what the tiers mean).
+1. **Browse** to a drum-stem WAV and pick a target plugin. Medium/low-confidence
+   plugins show a one-line inline hint (full detail lives in each profile's
+   `notes` field under `mappings/`).
 2. Click **Convert**. Separation and onset detection run on a background thread
-   with a staged progress bar, so the window stays responsive. When it finishes,
-   the waveform shows color-coded onset markers (kick/snare/toms/cymbals).
-3. Drag the **sensitivity** slider to re-run detection live (fast — it reuses the
-   already-separated stems). Left detects only the strongest hits; right detects
-   more, quieter hits.
+   with a staged progress bar. When it finishes, the waveform shows the input
+   audio with color-coded onset markers (kick / snare / toms / cymbals). Use
+   **Reset View** or double-click the plot to fit the full clip; pan/zoom is
+   clamped to the audio so you cannot scroll into empty space.
+3. **Sensitivity** (optional): the slider starts centered on the tuned per-stem
+   defaults — most material should not need adjustment. Drag and **release** to
+   re-run detection on the cached stems (left = fewer/stronger hits only, right
+   = more including quieter hits). Ghost notes are kept by default; per-stem
+   presets already bias kick/snare toward sensitivity and cymbals/toms toward
+   rejecting bleed.
 4. Click **Save MIDI...** to write the plugin-remapped `.mid`.
 
-Expected wait for Convert: separation dominates and is CPU-bound. A ~30s clip
-typically takes roughly 15-50s on a CPU without a GPU (onset detection, merge,
-and remap together add well under 2s). The first ever run also downloads a
-one-time ~167 MB separation model. Live sensitivity re-runs take under a second
-since they skip separation.
+**Timing:** separation dominates and is CPU-bound. A ~30s clip typically takes
+roughly 15–50s on CPU without a GPU; onset detection, merge, and remap add well
+under 2s. Sensitivity re-runs skip separation and take under a second. The first
+Convert on a fresh install also downloads a one-time ~167 MB Demucs checkpoint.
+
+**Temp files:** separated stems are cached under `%TEMP%\audiotomidi_*` for the
+session (so the sensitivity slider can re-detect without re-separating). They are
+removed when you quit normally. On startup, any leftover `audiotomidi_*` folders
+from a crashed prior session are cleaned up automatically.
 
 ## Transcribe a drum voice to MIDI (CLI)
 
@@ -66,9 +76,9 @@ Useful options:
 - `--window-ms` velocity measurement window after each onset
 - `--tempo` initial tempo written into the file
 
-Velocities are normalized per file: the quietest hit maps toward the velocity
-floor and the loudest toward 127, so velocity visibly tracks loudness in a DAW
-piano roll.
+Velocities are normalized per file: the quietest hit maps to a floor of **20**
+(not 1) and the loudest toward 127, so ghost notes stay audible in a DAW piano
+roll while still tracking relative loudness.
 
 ## Split a full-kit drum WAV into stems (CLI)
 
@@ -148,19 +158,25 @@ python pipeline/merge.py drums_stems --plugin ezdrummer_3 -o drums.mid
 Only the notes this pipeline emits need coverage: `36` (kick), `38` (snare),
 `45` (floor tom), `50` (rack tom), `49` (crash), and `47` (single-cluster tom
 fallback). A GM note with no entry in a profile passes through unchanged (with a
-warning); hits are never dropped.
+one-time console warning per distinct note); hits are never dropped.
 
-Confidence tiers reflect how well each plugin's GM compatibility is documented,
-not output quality:
+Each profile JSON may also include `ui_label_suffix` and `ui_hint` for the GUI
+dropdown label and one-line warning; the full `notes` field holds detailed
+mapping rationale.
+
+Confidence tiers reflect how well each plugin's mapping is documented and
+verified, not transcription quality:
 
 - **high** — Superior Drummer 3, EZdrummer 3, Addictive Drums 2, BFD3: documented
-  built-in GM keymap presets, so the profiles are pass-through.
-- **medium** — Steven Slate Drums 5.5: not native GM; load the community Groove
-  Monkee GM IOMap in its Map tab so the pass-through profile lines up.
-- **low** — GetGood Drums (ships a "GM Mapping" preset but assignments vary per
-  library title — verify in the Mapping tab) and Drumforge (proprietary factory
-  map where GM 49/50 may hit the wrong piece — load a GM-compatible preset in its
-  Map page or remap toms/cymbals manually).
+  built-in GM keymap presets; profiles are pass-through for all six emitted notes.
+- **medium** — Steven Slate Drums 5.5 (not native GM; load the Groove Monkee GM
+  IOMap in its Map tab) and GetGood Drums (verified against Modern & Massive's
+  built-in **GM** preset only — select **GM** in the plugin, not Halpern or the
+  default GGD preset; kick/snare/crash/rack tom pass through, but our floor tom
+  and tom fallback `45`/`47` remap to GGD note **43** / Floor Tom 1).
+- **low** — Drumforge (proprietary factory map; kick/snare pass through but
+  toms/cymbals may land on the wrong piece without a GM-compatible preset in
+  Drumforge's Map page).
 
 ## Run tests
 

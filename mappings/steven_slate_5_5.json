@@ -10,5 +10,7 @@
     "49": 49,
     "50": 50
   },
-  "notes": "SSD5.5 is not native General MIDI. Load the Groove Monkee GM IOMap in SSD5.5's Map tab; this pass-through profile assumes that IOMap is active. Without it, GM notes will not trigger the expected pieces."
+  "notes": "SSD5.5 is not native General MIDI. Load the Groove Monkee GM IOMap in SSD5.5's Map tab; this pass-through profile assumes that IOMap is active. Without it, GM notes will not trigger the expected pieces.",
+  "ui_label_suffix": "load GM IOMap in plugin",
+  "ui_hint": "Load the Groove Monkee GM IOMap in SSD5.5's Map tab before playback."
 }

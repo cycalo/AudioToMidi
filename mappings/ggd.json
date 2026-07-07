@@ -10,5 +10,7 @@
     "49": 49,
     "50": 50
   },
-  "notes": "Verified against Modern & Massive only: select the 'GM' mapping preset in the plugin (not Halpern or the default 'GGD' preset). Kick/snare/crash/rack tom match exactly (36/38/49/50). Our floor tom (45) and single-tom fallback (47) both remap to 43 (Floor Tom 1) — a judgment call: GGD's GM preset also has Floor Tom 2 at 41, but this pipeline emits at most two tom voices and cannot distinguish more than floor vs rack. Other GGD library titles may place floor toms differently; verify in the Mapping tab."
+  "notes": "Verified against Modern & Massive only: select the 'GM' mapping preset in the plugin (not Halpern or the default 'GGD' preset). Kick/snare/crash/rack tom match exactly (36/38/49/50). Our floor tom (45) and single-tom fallback (47) both remap to 43 (Floor Tom 1) — a judgment call: GGD's GM preset also has Floor Tom 2 at 41, but this pipeline emits at most two tom voices and cannot distinguish more than floor vs rack. Other GGD library titles may place floor toms differently; verify in the Mapping tab.",
+  "ui_label_suffix": "select 'GM' preset in plugin",
+  "ui_hint": "Verified for GGD Modern & Massive's 'GM' preset only — floor tom accuracy may vary by library title."
 }

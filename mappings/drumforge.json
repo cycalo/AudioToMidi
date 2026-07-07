@@ -10,5 +10,7 @@
     "49": 49,
     "50": 50
   },
-  "notes": "Drumforge's factory map is proprietary: kick 36 and snare 38 match GM, but toms sit in a contiguous E1-A#1 cluster and crashes start around C3, so GM 50 (rack tom) and 49 (crash) may trigger the wrong piece. This pass-through is a best-effort default; load a GM-compatible preset in Drumforge's Map page or remap toms/cymbals manually."
+  "notes": "Drumforge's factory map is proprietary: kick 36 and snare 38 match GM, but toms sit in a contiguous E1-A#1 cluster and crashes start around C3, so GM 50 (rack tom) and 49 (crash) may trigger the wrong piece. This pass-through is a best-effort default; load a GM-compatible preset in Drumforge's Map page or remap toms/cymbals manually.",
+  "ui_label_suffix": "mapping may need verification",
+  "ui_hint": "Best-effort pass-through — load a GM-compatible map in Drumforge for toms/cymbals."
 }

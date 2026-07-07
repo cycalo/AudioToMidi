@@ -170,17 +170,19 @@ class MainWindow(QMainWindow):
             except (ValueError, FileNotFoundError):
                 continue
             name = profile.get("plugin", stem)
-            confidence = profile.get("confidence", "high")
-            label = self._plugin_label(name, confidence)
+            label = self._plugin_label(profile)
             self.plugin_combo.addItem(label, userData=stem)
         if self.plugin_combo.count():
             self._on_plugin_changed(self.plugin_combo.currentIndex())
 
     @staticmethod
-    def _plugin_label(name: str, confidence: str) -> str:
-        if confidence == "medium":
-            return f"{name} (load GM IOMap in plugin)"
-        if confidence == "low":
+    def _plugin_label(profile: dict) -> str:
+        name = profile.get("plugin", "")
+        suffix = profile.get("ui_label_suffix")
+        if suffix:
+            return f"{name} ({suffix})"
+        confidence = profile.get("confidence", "high")
+        if confidence in ("medium", "low"):
             return f"{name} (mapping may need verification)"
         return name
 
@@ -207,10 +209,10 @@ class MainWindow(QMainWindow):
             self.warning_label.setVisible(False)
             return
         confidence = profile.get("confidence", "high")
-        notes = profile.get("notes", "")
         if confidence in ("medium", "low"):
+            hint = profile.get("ui_hint") or "Mapping may need verification."
             prefix = "Note" if confidence == "medium" else "Heads up"
-            self.warning_label.setText(f"{prefix}: {notes}")
+            self.warning_label.setText(f"{prefix}: {hint}")
             self.warning_label.setVisible(True)
         else:
             self.warning_label.setVisible(False)
