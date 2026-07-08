@@ -22,10 +22,12 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from pipeline.separation import (  # noqa: E402
+    DEMUCS_OUTPUT_STEMS,
     DEMUCS_STEMS,
     DSP_STEMS,
     MODELS_DIR,
     DRUMSEP_FILENAME,
+    _extract_hihat_stem,
     device_options,
     resolve_device,
     separate,
@@ -100,6 +102,43 @@ def test_dsp_band_routing(tmp_path: Path) -> None:
     assert hihat_hf > cymbals_hf
 
 
+def test_extract_hihat_stem_energy_in_hat_band() -> None:
+    duration = 0.5
+    sr = SR
+    t = np.linspace(0, duration, int(sr * duration), endpoint=False, dtype=np.float32)
+    # Short bursts at 8 kHz (hat-like).
+    y = np.zeros_like(t)
+    for start in (0.1, 0.3):
+        idx = int(start * sr)
+        burst = np.sin(2 * np.pi * 8000 * t[idx : idx + 512]).astype(np.float32)
+        y[idx : idx + burst.size] = burst * 0.5
+    hihat = _extract_hihat_stem(y, sr)
+    assert _rms(hihat) > 0
+    assert _energy_fraction(hihat, sr, [(6000, 12000)]) > 0.4
+
+
+def test_demucs_hybrid_writes_hihat_stem(tmp_path: Path, monkeypatch) -> None:
+    src = tmp_path / "mix.wav"
+    sf.write(str(src), _click_train(duration=0.5), SR)
+    out_dir = tmp_path / "stems"
+
+    def _fake_demucs(input_path: str, out_path: Path, **kwargs) -> dict:
+        stems = {}
+        for name in DEMUCS_STEMS:
+            stems[name] = out_path / f"{name}.wav"
+            sf.write(str(stems[name]), _click_train(duration=0.5), SR)
+        return stems
+
+    monkeypatch.setattr("pipeline.separation._separate_demucs", _fake_demucs)
+    manifest = separate(str(src), str(out_dir), backend="demucs", device="cpu")
+
+    assert set(manifest["stems"]) == set(DEMUCS_OUTPUT_STEMS)
+    assert (out_dir / "hihat.wav").is_file()
+    hihat, _ = sf.read(str(out_dir / "hihat.wav"))
+    assert _rms(np.asarray(hihat)) > 0
+    assert _energy_fraction(np.asarray(hihat), SR, [(6000, 12000)]) > 0.3
+
+
 def test_unknown_backend_raises(tmp_path: Path) -> None:
     src = tmp_path / "clicks.wav"
     sf.write(str(src), _click_train(duration=0.5), SR)
@@ -152,7 +191,7 @@ def test_demucs_real_fixture(tmp_path: Path) -> None:
     manifest = separate(str(fixture), str(tmp_path / "stems"), backend="demucs", device="cpu")
 
     assert manifest["backend"] == "demucs"
-    assert set(manifest["stems"]) == set(DEMUCS_STEMS)
+    assert set(manifest["stems"]) == set(DEMUCS_OUTPUT_STEMS)
     for name, path in manifest["stems"].items():
         data, _ = sf.read(path)
         assert _rms(np.asarray(data)) > 0, f"{name} stem is silent"

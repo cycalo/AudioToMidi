@@ -7,36 +7,38 @@ sensitivity slider re-runs detection.
 
 Pan/zoom is clamped to the loaded clip (plus a small margin). Double-click the
 plot or use **Reset View** to return to the full waveform after zooming in.
+
+Click a voice label in the legend to filter preview playback (additive toggle);
+click **All** to reset the filter.
 """
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, FrozenSet, List, Optional, Sequence, Tuple
 
 import librosa
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from pipeline.drum_voices import (  # noqa: E402
+    ALL_VOICES,
+    GM_NOTE_TO_VOICE,
+    VOICE_ORDER,
+    filter_gm_events_by_voices,
+    is_all_voices,
+    toggle_voice_filter,
+)
+
 Event = Tuple[float, int, int]
 
-# Map each General MIDI note the pipeline emits to a drum voice + display color.
-_NOTE_TO_VOICE: Dict[int, str] = {
-    36: "kick",
-    38: "snare",
-    45: "toms",
-    47: "toms",
-    50: "toms",
-    49: "cymbals",
-    42: "hihat",
-}
 _VOICE_COLORS: Dict[str, Tuple[int, int, int]] = {
     "kick": (214, 39, 40),
     "snare": (44, 160, 44),
@@ -44,7 +46,6 @@ _VOICE_COLORS: Dict[str, Tuple[int, int, int]] = {
     "cymbals": (255, 127, 14),
     "hihat": (227, 199, 0),
 }
-_VOICE_ORDER = ("kick", "snare", "toms", "cymbals", "hihat")
 
 # Cap the number of plotted samples so long clips stay responsive.
 _MAX_DISPLAY_SAMPLES = 8000
@@ -56,8 +57,42 @@ _Y_MARGIN_FRAC = 0.08
 _MIN_X_ZOOM_S = 0.05  # tightest zoom-in window
 
 
+class _VoiceLegendButton(QPushButton):
+    """Clickable legend chip for one drum voice."""
+
+    def __init__(self, voice: str, parent: QWidget | None = None) -> None:
+        super().__init__(voice, parent)
+        self.voice = voice
+        r, g, b = _VOICE_COLORS[voice]
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip(f"Click to filter preview to {voice}")
+        self._color = (r, g, b)
+        self._active = True
+        self._refresh_style()
+
+    def set_active(self, active: bool) -> None:
+        self._active = active
+        self._refresh_style()
+
+    def _refresh_style(self) -> None:
+        r, g, b = self._color
+        if self._active:
+            self.setStyleSheet(
+                f"QPushButton {{ background-color: rgb({r}, {g}, {b}); color: #111;"
+                f" border: 2px solid #fff; padding: 2px 8px; font-weight: bold; }}"
+            )
+        else:
+            self.setStyleSheet(
+                f"QPushButton {{ background-color: rgb({r}, {g}, {b}); color: #333;"
+                f" border: 1px solid #666; padding: 2px 8px; opacity: 0.45; }}"
+            )
+
+
 class WaveformView(QWidget):
     """Waveform plot with color-coded onset markers for review."""
+
+    seekRequested = Signal(float)
+    voiceFilterChanged = Signal(object)  # FrozenSet[str]
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -65,6 +100,11 @@ class WaveformView(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+
+        self._voice_buttons: Dict[str, _VoiceLegendButton] = {}
+        self._all_btn: Optional[QPushButton] = None
+        self._all_events: List[Event] = []
+        self._voice_filter: FrozenSet[str] = ALL_VOICES
 
         toolbar = QHBoxLayout()
         self._build_voice_legend(toolbar)
@@ -80,6 +120,7 @@ class WaveformView(QWidget):
         self._plot.setBackground(None)
         self._plot.setLabel("bottom", "Time", units="s")
         self._plot.setMenuEnabled(False)
+        self._plot.hideButtons()
         self._plot.showGrid(x=True, y=False, alpha=0.2)
         layout.addWidget(self._plot)
 
@@ -90,6 +131,20 @@ class WaveformView(QWidget):
         self._playhead: pg.InfiniteLine | None = None
         self._amplitude: float = 1.0
         self._duration: Optional[float] = None
+        self._seek_enabled: bool = False
+
+    def set_seek_enabled(self, enabled: bool) -> None:
+        """Allow single-click on the plot to request a playback seek."""
+        self._seek_enabled = bool(enabled)
+
+    def voice_filter(self) -> FrozenSet[str]:
+        return self._voice_filter
+
+    def set_voice_filter(self, voices: FrozenSet[str]) -> None:
+        """Update the active voice filter and legend highlighting."""
+        self._voice_filter = voices
+        self._sync_legend_styles()
+        self._redraw_markers()
 
     def set_waveform(self, wav_path: str) -> None:
         """Load and display the (decimated) waveform of ``wav_path``."""
@@ -111,33 +166,9 @@ class WaveformView(QWidget):
         self.reset_btn.setEnabled(True)
 
     def set_events(self, events: Sequence[Event]) -> None:
-        """Overlay onset markers for ``events``, replacing any previous markers."""
-        self._clear_markers()
-        by_voice: Dict[str, List[float]] = {v: [] for v in _VOICE_ORDER}
-        for time_s, note, _velocity in events:
-            voice = _NOTE_TO_VOICE.get(int(note), "cymbals")
-            by_voice[voice].append(float(time_s))
-
-        top = self._amplitude
-        for voice in _VOICE_ORDER:
-            times = by_voice[voice]
-            if not times:
-                continue
-            xs = np.empty(len(times) * 3, dtype=float)
-            ys = np.empty(len(times) * 3, dtype=float)
-            xs[0::3] = times
-            xs[1::3] = times
-            xs[2::3] = np.nan
-            ys[0::3] = -top
-            ys[1::3] = top
-            ys[2::3] = np.nan
-            item = self._plot.plot(
-                xs,
-                ys,
-                connect="finite",
-                pen=pg.mkPen(_VOICE_COLORS[voice], width=1),
-            )
-            self._marker_items.append(item)
+        """Overlay onset markers for ``events``, respecting the voice filter."""
+        self._all_events = [(float(t), int(n), int(v)) for t, n, v in events]
+        self._redraw_markers()
 
     def set_playhead(self, time_s: Optional[float]) -> None:
         """Show or hide a vertical playhead at ``time_s`` seconds."""
@@ -174,6 +205,9 @@ class WaveformView(QWidget):
             self._wave_item = None
         self._duration = None
         self._amplitude = 1.0
+        self._all_events = []
+        self._voice_filter = ALL_VOICES
+        self._sync_legend_styles()
         self._plot.getViewBox().setLimits(
             xMin=None, xMax=None, yMin=None, yMax=None,
             minXRange=None, maxXRange=None, minYRange=None, maxYRange=None,
@@ -200,8 +234,14 @@ class WaveformView(QWidget):
         )
 
     def _build_voice_legend(self, layout: QHBoxLayout) -> None:
-        """Compact color key above the plot (keeps the waveform area unobstructed)."""
-        for voice in ("kick", "snare", "toms", "cymbals"):
+        """Compact clickable color key above the plot."""
+        self._all_btn = QPushButton("All")
+        self._all_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._all_btn.setToolTip("Show and play all drum voices")
+        self._all_btn.clicked.connect(self._on_all_voices_clicked)
+        layout.addWidget(self._all_btn)
+
+        for voice in VOICE_ORDER:
             r, g, b = _VOICE_COLORS[voice]
             swatch = QLabel()
             swatch.setFixedSize(14, 14)
@@ -210,12 +250,85 @@ class WaveformView(QWidget):
                 f"background-color: rgb({r}, {g}, {b}); border: 1px solid #888;"
             )
             layout.addWidget(swatch)
-            layout.addWidget(QLabel(voice))
-            layout.addSpacing(12)
+            btn = _VoiceLegendButton(voice)
+            btn.clicked.connect(lambda _checked=False, v=voice: self._on_voice_clicked(v))
+            self._voice_buttons[voice] = btn
+            layout.addWidget(btn)
+            layout.addSpacing(8)
+        self._sync_legend_styles()
+
+    def _on_voice_clicked(self, voice: str) -> None:
+        new_filter = toggle_voice_filter(self._voice_filter, voice)
+        if new_filter == self._voice_filter:
+            return
+        self._voice_filter = new_filter
+        self._sync_legend_styles()
+        self._redraw_markers()
+        self.voiceFilterChanged.emit(self._voice_filter)
+
+    def _on_all_voices_clicked(self) -> None:
+        if is_all_voices(self._voice_filter):
+            return
+        self._voice_filter = ALL_VOICES
+        self._sync_legend_styles()
+        self._redraw_markers()
+        self.voiceFilterChanged.emit(self._voice_filter)
+
+    def _sync_legend_styles(self) -> None:
+        all_active = is_all_voices(self._voice_filter)
+        for voice, btn in self._voice_buttons.items():
+            btn.set_active(all_active or voice in self._voice_filter)
+        if self._all_btn is not None:
+            if all_active:
+                self._all_btn.setStyleSheet(
+                    "QPushButton { font-weight: bold; border: 2px solid #fff; padding: 2px 8px; }"
+                )
+            else:
+                self._all_btn.setStyleSheet(
+                    "QPushButton { padding: 2px 8px; border: 1px solid #666; }"
+                )
+
+    def _redraw_markers(self) -> None:
+        self._clear_markers()
+        events = filter_gm_events_by_voices(self._all_events, self._voice_filter)
+        by_voice: Dict[str, List[float]] = {v: [] for v in VOICE_ORDER}
+        for time_s, note, _velocity in events:
+            voice = GM_NOTE_TO_VOICE.get(int(note), "cymbals")
+            by_voice[voice].append(float(time_s))
+
+        top = self._amplitude
+        for voice in VOICE_ORDER:
+            times = by_voice[voice]
+            if not times:
+                continue
+            xs = np.empty(len(times) * 3, dtype=float)
+            ys = np.empty(len(times) * 3, dtype=float)
+            xs[0::3] = times
+            xs[1::3] = times
+            xs[2::3] = np.nan
+            ys[0::3] = -top
+            ys[1::3] = top
+            ys[2::3] = np.nan
+            item = self._plot.plot(
+                xs,
+                ys,
+                connect="finite",
+                pen=pg.mkPen(_VOICE_COLORS[voice], width=1),
+            )
+            self._marker_items.append(item)
 
     def _on_plot_clicked(self, event) -> None:
         if event.double() and event.button() == Qt.MouseButton.LeftButton:
             self.reset_view()
+            return
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and self._seek_enabled
+            and self._duration is not None
+        ):
+            pos = self._plot.getViewBox().mapSceneToView(event.scenePos())
+            time_s = max(0.0, min(float(pos.x()), self._duration))
+            self.seekRequested.emit(time_s)
 
     def _clear_markers(self) -> None:
         for item in self._marker_items:

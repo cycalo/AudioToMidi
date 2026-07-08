@@ -23,6 +23,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from app import controller as controller_mod  # noqa: E402
+from pipeline.drum_voices import ALL_VOICES  # noqa: E402
 from app.controller import PipelineController  # noqa: E402
 
 
@@ -142,6 +143,90 @@ def test_export_without_analysis_reports_error(qapp) -> None:
     ctrl.exportFailed.connect(lambda e: errors.append(e))
     ctrl.export_midi("unused.mid")
     assert errors
+
+
+def test_reset_session_clears_state(qapp, tmp_path) -> None:
+    ctrl = PipelineController()
+    with patch.object(controller_mod, "separate"), patch.object(
+        controller_mod, "transcribe_stems", return_value=([(0.0, 36, 100)], {})
+    ):
+        _run_analysis(ctrl, str(tmp_path / "drums.wav"))
+
+    reset_seen: list[bool] = []
+    ctrl.sessionReset.connect(lambda: reset_seen.append(True))
+    ctrl.reset_session()
+
+    assert ctrl.state is None
+    assert not ctrl.has_preview_cache()
+    assert reset_seen == [True]
+    ctrl.cleanup()
+
+
+def test_preview_play_uses_cache_without_worker(qapp, tmp_path) -> None:
+    ctrl = PipelineController()
+    buffer = np.zeros(4410, dtype=np.float32)
+    ctrl._preview_cache[("midi", ALL_VOICES)] = (buffer, 44100)
+    ctrl._state = controller_mod.AnalysisState(
+        wav_path=str(tmp_path / "drums.wav"),
+        stems_dir=str(tmp_path / "stems"),
+        events=[(0.0, 36, 100)],
+    )
+    started: list[str] = []
+    ctrl.previewStarted.connect(lambda m: started.append(m))
+
+    with patch.object(ctrl, "_start_worker") as worker, patch.object(
+        ctrl._playback, "play"
+    ):
+        ctrl.preview_play("midi")
+
+    assert started == ["midi"]
+    worker.assert_not_called()
+    ctrl.preview_stop()
+    ctrl.cleanup()
+
+
+def test_preview_seek_updates_position(qapp, tmp_path) -> None:
+    ctrl = PipelineController()
+    buffer = np.zeros(88200, dtype=np.float32)
+    ctrl._preview_cache[("midi", ALL_VOICES)] = (buffer, 44100)
+    ctrl._preview_mode = "midi"
+    positions: list[float] = []
+    ctrl.previewPosition.connect(lambda p: positions.append(p))
+
+    ctrl.preview_seek(1.5)
+    assert positions[-1] == pytest.approx(1.5)
+    assert ctrl._pending_start_s == pytest.approx(1.5)
+    ctrl.cleanup()
+
+
+def test_preview_seek_restarts_while_session_active(qapp, tmp_path) -> None:
+    """Seek must restart audio when the preview timer is active even if PortAudio
+    briefly reports inactive (regression for multi-click waveform scrub)."""
+    ctrl = PipelineController()
+    buffer = np.zeros(88200, dtype=np.float32)
+    ctrl._preview_cache[("midi", ALL_VOICES)] = (buffer, 44100)
+    ctrl._preview_mode = "midi"
+    ctrl._preview_timer.start()
+    with patch.object(ctrl._playback, "is_playing", return_value=False), patch.object(
+        ctrl._playback, "play"
+    ) as play:
+        ctrl.preview_seek(2.0)
+    play.assert_called_once()
+    assert ctrl._preview_timer.isActive()
+    ctrl.cleanup()
+
+
+def test_set_transcription_version_forwarded(qapp, tmp_path) -> None:
+    ctrl = PipelineController()
+    ctrl.set_transcription_version("v1")
+    assert ctrl.transcription_version == "v1"
+    with patch.object(controller_mod, "separate"), patch.object(
+        controller_mod, "transcribe_stems", return_value=([(0.0, 36, 100)], {})
+    ) as ts:
+        _run_analysis(ctrl, str(tmp_path / "drums.wav"))
+    ts.assert_called()
+    assert ts.call_args.kwargs.get("transcription_version") == "v1"
+    ctrl.cleanup()
 
 
 def test_detect_onsets_for_stem_forwards_and_clamps_delta_scale() -> None:

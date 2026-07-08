@@ -35,6 +35,7 @@ if str(REPO_ROOT) not in sys.path:
 from app.controller import PipelineController  # noqa: E402
 from app.ui.waveform_view import WaveformView  # noqa: E402
 from pipeline.remap import available_profiles, load_profile  # noqa: E402
+from pipeline.drum_voices import ALL_VOICES  # noqa: E402
 from pipeline.separation import device_options  # noqa: E402
 
 # Slider endpoints map to onset-sensitivity delta scales (see onset_detection).
@@ -113,6 +114,20 @@ class MainWindow(QMainWindow):
         device_row.addWidget(self.device_combo, stretch=1)
         root.addLayout(device_row)
 
+        # Transcription algorithm row.
+        transcription_row = QHBoxLayout()
+        transcription_row.addWidget(QLabel("Transcription:", central))
+        self.transcription_combo = QComboBox(central)
+        self.transcription_combo.addItem("v2 — improved hats", userData="v2")
+        self.transcription_combo.addItem("v1 — classic", userData="v1")
+        self.transcription_combo.setToolTip(
+            "v2 reroutes open-hat bleed from crashes and distinguishes open vs "
+            "closed hi-hats. v1 is the original closed-hat + crash behavior."
+        )
+        self.transcription_combo.currentIndexChanged.connect(self._on_transcription_changed)
+        transcription_row.addWidget(self.transcription_combo, stretch=1)
+        root.addLayout(transcription_row)
+
         self.warning_label = QLabel("", central)
         self.warning_label.setWordWrap(True)
         self.warning_label.setStyleSheet("color: #b8860b;")
@@ -146,7 +161,17 @@ class MainWindow(QMainWindow):
         self.source_combo.addItem("Original", userData="original")
         self.source_combo.addItem("Both", userData="both")
         self.source_combo.setEnabled(False)
+        self.source_combo.currentIndexChanged.connect(self._on_source_changed)
         action_row.addWidget(self.source_combo)
+        self.reset_position_btn = QPushButton("Reset Position", central)
+        self.reset_position_btn.setEnabled(False)
+        self.reset_position_btn.setToolTip("Move the preview playhead back to the start.")
+        self.reset_position_btn.clicked.connect(self._on_reset_position)
+        action_row.addWidget(self.reset_position_btn)
+        self.clear_btn = QPushButton("Clear All", central)
+        self.clear_btn.setToolTip("Stop playback and clear the loaded WAV and analysis.")
+        self.clear_btn.clicked.connect(self._on_clear_all)
+        action_row.addWidget(self.clear_btn)
         action_row.addStretch(1)
         root.addLayout(action_row)
 
@@ -197,6 +222,9 @@ class MainWindow(QMainWindow):
         self.controller.previewFinished.connect(self._on_preview_finished)
         self.controller.previewFailed.connect(self._on_preview_failed)
         self.controller.previewPosition.connect(self.waveform.set_playhead)
+        self.controller.sessionReset.connect(self._on_session_reset)
+        self.waveform.seekRequested.connect(self._on_waveform_seek)
+        self.waveform.voiceFilterChanged.connect(self._on_voice_filter_changed)
 
     def _populate_plugins(self) -> None:
         stems = [s for s in available_profiles() if s != "general_midi"]
@@ -214,6 +242,7 @@ class MainWindow(QMainWindow):
             self._on_plugin_changed(self.plugin_combo.currentIndex())
         if self.device_combo.count():
             self._on_device_changed(self.device_combo.currentIndex())
+        self._on_transcription_changed(self.transcription_combo.currentIndex())
 
     @staticmethod
     def _plugin_label(profile: dict) -> str:
@@ -264,6 +293,17 @@ class MainWindow(QMainWindow):
         if device:
             self.controller.set_device(device)
 
+    def _on_transcription_changed(self, index: int) -> None:
+        version = self.transcription_combo.itemData(index)
+        if not version:
+            return
+        prev = self.controller.transcription_version
+        self.controller.set_transcription_version(version)
+        if self.controller.state is not None and version != prev and not self.controller.is_busy():
+            self.status_label.setText(f"Re-transcribing ({version})...")
+            self._set_busy(True, keep_save=True)
+            self.controller.retranscribe()
+
     def _on_convert(self) -> None:
         if not self._wav_path:
             return
@@ -303,6 +343,27 @@ class MainWindow(QMainWindow):
 
     def _on_stop_preview(self) -> None:
         self.controller.preview_stop()
+
+    def _on_reset_position(self) -> None:
+        self.controller.preview_reset_position()
+
+    def _on_waveform_seek(self, time_s: float) -> None:
+        self.controller.preview_seek(time_s)
+
+    def _on_voice_filter_changed(self, voices: object) -> None:
+        self.controller.set_voice_filter(voices)  # type: ignore[arg-type]
+
+    def _on_source_changed(self, index: int) -> None:
+        mode = self.source_combo.itemData(index)
+        if not mode or self.controller.is_busy():
+            return
+        if self.controller.is_preview_playing() or self.controller.has_preview_cache():
+            self.controller.preview_change_source(mode)
+
+    def _on_clear_all(self) -> None:
+        if self.controller.is_busy():
+            return
+        self.controller.reset_session()
 
     # -- slots: controller signals -----------------------------------------
     def _on_progress(self, message: str, percent: int) -> None:
@@ -347,7 +408,9 @@ class MainWindow(QMainWindow):
         self._set_busy(False, keep_save=True)
         self.play_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
-        self.source_combo.setEnabled(True)
+        self.reset_position_btn.setEnabled(True)
+        self.waveform.set_seek_enabled(True)
+        self._update_preview_controls()
         self.status_label.setText(f"Playing preview ({mode})...")
 
     def _on_preview_finished(self) -> None:
@@ -361,6 +424,24 @@ class MainWindow(QMainWindow):
         self._set_busy(False, keep_save=True)
         self._update_preview_controls()
         self.status_label.setText(f"Preview failed: {error}")
+
+    def _on_session_reset(self) -> None:
+        self._wav_path = None
+        self.path_edit.clear()
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setValue(0)
+        self._elapsed_timer.stop()
+        self._reset_elapsed_display()
+        self._reset_sensitivity_slider()
+        self.warning_label.setVisible(False)
+        self.waveform.clear()
+        self.waveform.set_seek_enabled(False)
+        self.waveform.set_voice_filter(ALL_VOICES)
+        self.convert_btn.setEnabled(False)
+        self.save_btn.setEnabled(False)
+        self.sensitivity_slider.setEnabled(False)
+        self._update_preview_controls()
+        self.status_label.setText("Load a WAV and pick a plugin to begin.")
 
     # -- helpers -----------------------------------------------------------
     def _reset_elapsed_display(self, *, running: bool = False) -> None:
@@ -404,13 +485,22 @@ class MainWindow(QMainWindow):
             )
 
         self.stop_btn.setEnabled(playing)
-        self.source_combo.setEnabled(has_state and preview_ok and not busy)
+        self.reset_position_btn.setEnabled(
+            has_state and preview_ok and (playing or self.controller.has_preview_cache())
+        )
+        self.waveform.set_seek_enabled(
+            has_state and preview_ok and (playing or self.controller.has_preview_cache())
+        )
+        self.source_combo.setEnabled(
+            (has_state and preview_ok and not busy) or playing
+        )
 
     def _set_busy(self, busy: bool, *, keep_save: bool = False, keep_preview: bool = False) -> None:
         self.convert_btn.setEnabled(not busy and self._wav_path is not None)
         self.browse_btn.setEnabled(not busy)
         self.plugin_combo.setEnabled(not busy)
         self.device_combo.setEnabled(not busy)
+        self.transcription_combo.setEnabled(not busy)
         self.sensitivity_slider.setEnabled(not busy and self.controller.state is not None)
         if not keep_save:
             self.save_btn.setEnabled(not busy and self.controller.state is not None)
@@ -418,4 +508,5 @@ class MainWindow(QMainWindow):
             self._update_preview_controls()
         elif busy:
             self.play_btn.setEnabled(False)
-            self.source_combo.setEnabled(False)
+            if not self.controller.is_preview_playing():
+                self.source_combo.setEnabled(False)

@@ -21,7 +21,7 @@ Phase 2 acceptance bar).
 
 ## Backend stem sets
 
-- `demucs`: kick, snare, toms, cymbals (hi-hat is inside cymbals).
+- `demucs`: kick, snare, toms, hihat (DSP extract), cymbals.
 - `dsp`: kick, snare, toms, hihat, cymbals.
 
 ## Separation quality notes (log per stem / genre)
@@ -54,3 +54,5 @@ Observations on the four demucs fixtures (default settings, bleed suppression of
 - Tom onset counts run high, consistent with cymbal/snare bleed into the toms stem
   (Section 7 known limitation). Enable `--bleed-suppression` or raise
   `--velocity-floor` to trim it once validated by ear.
+- Transcription **v2** (default) may emit GM 46 (open hi-hat) in addition to 42/49;
+  compare with `--transcription-version v1` on the same stems dir when evaluating hat/crash accuracy.

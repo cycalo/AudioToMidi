@@ -127,6 +127,21 @@ def test_merge_bleed_keeps_loud_coincident() -> None:
     assert len(merged) == 2
 
 
+def test_hat_priority_dedupe_drops_coincident_crash() -> None:
+    events = {"hihat": [(1.0, 42, 80)], "cymbals": [(1.01, 49, 100)]}
+    merged = merge_events(events, apply_min_ioi=False)
+    notes = [n for _, n, _ in merged]
+    assert 42 in notes
+    assert 49 not in notes
+
+
+def test_distant_crash_kept_when_hat_separate() -> None:
+    events = {"hihat": [(1.0, 42, 80)], "cymbals": [(1.5, 49, 100)]}
+    merged = merge_events(events, apply_min_ioi=False)
+    assert len(merged) == 2
+    assert {n for _, n, _ in merged} == {42, 49}
+
+
 # --------------------------------------------------------------------------
 # Full pipeline against real Demucs stems (skip if absent)
 # --------------------------------------------------------------------------

@@ -247,7 +247,7 @@ Mark each profile's `confidence` field (`high` / `medium` / `low`) and surface i
 - **Tempo/quantization is out of scope for MVP.** The plan above outputs note events at their literal detected times; tempo detection and quantization-to-grid is a reasonable Phase 7 addition later, not a blocker for a usable v1.
 
 ## 8. Post-MVP Roadmap
-- Open hi-hat vs closed hi-hat state detection (spectral centroid heuristic).
+- **Implemented (v2):** Open hi-hat vs closed hi-hat via sustain/spectral heuristics; hat-like cymbal rerouting. v1 transcription preserved as a UI/CLI toggle.
 - Per-kit-title mapping profiles for GGD (since it varies by library, not just by plugin).
 - Tempo detection and note quantization options.
 - macOS build via PyInstaller/py2app once the Windows build is stable.

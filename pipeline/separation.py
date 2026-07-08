@@ -3,9 +3,10 @@
 Two backends:
 
 - ``demucs``: the ``inagoy/drumsep`` Hybrid Demucs checkpoint, run via
-  ``demucs-infer``. Produces 4 stems (kick, snare, toms, cymbals). Hi-hat is not
-  separated by this model; it stays inside the cymbals stem (a documented v1
-  limitation). The checkpoint is downloaded on first use and cached locally.
+  ``demucs-infer``. Produces 4 ML stems (kick, snare, toms, cymbals), then a
+  hybrid DSP pass extracts ``hihat`` from the original mix (6–12 kHz band) so
+  hi-hat onsets are not lumped into crash cymbals. The checkpoint is downloaded
+  on first use and cached locally.
 - ``dsp``: an in-house, ML-free fallback (HPSS + per-instrument frequency
   masking + a kick transient gate). No download, CPU-only. Produces 5 stems
   (kick, snare, toms, hihat, cymbals).
@@ -55,6 +56,8 @@ _SOURCE_TRANSLATION = {
 }
 
 DEMUCS_STEMS = ("kick", "snare", "toms", "cymbals")
+# Effective stem set after the hybrid hi-hat DSP post-pass on demucs runs.
+DEMUCS_OUTPUT_STEMS = ("kick", "snare", "toms", "hihat", "cymbals")
 DSP_STEMS = ("kick", "snare", "toms", "hihat", "cymbals")
 
 DEFAULT_BACKEND = "demucs"
@@ -229,9 +232,6 @@ def _separate_demucs(
     return stems
 
 
-# --------------------------------------------------------------------------
-# DSP backend (cukas/drumsep-style, ML-free)
-# --------------------------------------------------------------------------
 def _band_mask(freqs: np.ndarray, low: float, high: float, roll: float = 20.0) -> np.ndarray:
     """Soft band mask over ``freqs`` with raised-cosine roll-offs at the edges."""
     mask = np.zeros_like(freqs, dtype=np.float64)
@@ -258,6 +258,29 @@ def _envelope_follow(x: np.ndarray, attack: int, release: int) -> np.ndarray:
     return out
 
 
+def _hihat_band_mask(freqs: np.ndarray) -> np.ndarray:
+    """Hi-hat band (6–12 kHz), shared by DSP and hybrid demucs post-pass."""
+    return _band_mask(freqs, 6000, 12000)
+
+
+def _extract_hihat_stem(y: np.ndarray, sr: int) -> np.ndarray:
+    """Isolate hi-hat energy from a mono mix via STFT band masking."""
+    n = len(y)
+    stft = librosa.stft(y, n_fft=_N_FFT, hop_length=_HOP_LENGTH)
+    freqs = librosa.fft_frequencies(sr=sr, n_fft=_N_FFT)
+    spec = _hihat_band_mask(freqs)[:, None] * stft
+    return librosa.istft(spec, hop_length=_HOP_LENGTH, length=n).astype(np.float32)
+
+
+def _write_hihat_stem(input_path: str, out_dir: Path) -> Path:
+    """Extract and write ``hihat.wav`` from the original full-kit WAV."""
+    y, sr = librosa.load(input_path, sr=None, mono=True)
+    return _write_stem(out_dir, "hihat", _extract_hihat_stem(y, sr), sr)
+
+
+# --------------------------------------------------------------------------
+# DSP backend (cukas/drumsep-style, ML-free)
+# --------------------------------------------------------------------------
 def _separate_dsp(input_path: str, out_dir: Path) -> Dict[str, Path]:
     y, sr = librosa.load(input_path, sr=None, mono=True)
     n = len(y)
@@ -269,7 +292,7 @@ def _separate_dsp(input_path: str, out_dir: Path) -> Dict[str, Path]:
     kick_band = _band_mask(freqs, 20, 100)
     snare_band = np.maximum(_band_mask(freqs, 150, 300), _band_mask(freqs, 2000, 4000))
     snare_low = _band_mask(freqs, 150, 300)
-    hihat_band = _band_mask(freqs, 6000, 12000)
+    hihat_band = _hihat_band_mask(freqs)
     # Cymbals cover a broad high range but exclude the hi-hat sub-band.
     cymbals_band = _band_mask(freqs, 3000, 16000) * (1.0 - hihat_band)
     # Toms sit in the low-mids but avoid the kick and snare fundamentals.
@@ -292,7 +315,7 @@ def _separate_dsp(input_path: str, out_dir: Path) -> Dict[str, Path]:
         "kick": kick,
         "snare": _istft(snare_band, percussive),
         "toms": _istft(toms_band, percussive),
-        "hihat": _istft(hihat_band, stft),
+        "hihat": _extract_hihat_stem(y, sr),
         "cymbals": _istft(cymbals_band, stft),
     }
 
@@ -338,6 +361,7 @@ def separate(
         stems = _separate_demucs(
             input_path, out_path, device=resolved_device, shifts=shifts, overlap=overlap
         )
+        stems["hihat"] = _write_hihat_stem(input_path, out_path)
     elif backend == "dsp":
         resolved_device = "cpu"
         stems = _separate_dsp(input_path, out_path)

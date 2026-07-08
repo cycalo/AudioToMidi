@@ -24,7 +24,7 @@ AudioToMidi is a Windows desktop application that converts a WAV drum stem into 
 
 ## Features
 
-- **Full-kit transcription** — Separates a drum stem into kick, snare, toms, and cymbals, then detects onsets per voice with tuned per-stem thresholds.
+- **Full-kit transcription** — Separates a drum stem into kick, snare, toms, hi-hat, and cymbals (hybrid Demucs + DSP hi-hat extraction), then detects onsets per voice with tuned per-stem thresholds.
 - **Tom pitch clustering** — Splits the toms stem into floor tom and rack tom using relative pitch clustering (k=2).
 - **Velocity mapping** — Normalizes hit amplitudes to MIDI velocities with a configurable floor so ghost notes stay audible.
 - **Plugin remapping** — Transcribes to General MIDI first, then applies a thin JSON-driven remap layer for seven target plugins.
@@ -96,10 +96,12 @@ python app/main.py
 **Workflow:**
 
 1. **Browse** to a drum-stem WAV, pick a target plugin, and choose a **Device** for separation: **Auto** (GPU if available), **CPU**, or **GPU** (shown only when CUDA is detected). Medium/low-confidence plugins show an inline hint (full detail lives in each profile's `notes` field under `mappings/`).
-2. Click **Convert**. Separation and onset detection run on a background thread with a staged progress bar. When finished, the waveform shows color-coded onset markers (kick / snare / toms / cymbals).
-3. **Sensitivity** (optional) — The slider starts at tuned per-stem defaults. Drag and release to re-run detection on cached stems (left = fewer hits, right = more including quieter hits). Re-runs skip separation and typically finish in under a second.
-4. **Preview** (GetGood Drums only) — Select **GetGood Drums**, choose a **Source** mode (**MIDI** default, **Original**, or **Both**), then click **Play** to hear the remapped transcription through the bundled [Preview Kit](Preview%20Kit/) samples. Use **Both** to compare timing against the original stem. A playhead tracks playback on the waveform.
-5. Click **Save MIDI...** to write the plugin-remapped `.mid`.
+2. Click **Convert**. Separation and onset detection run on a background thread with a staged progress bar. When finished, the waveform shows color-coded onset markers (kick / snare / toms / hi-hat / cymbals).
+3. **Transcription** — Choose **v2 — improved hats** (default) or **v1 — classic**. v2 reroutes open-hat bleed from false crashes and distinguishes open vs closed hi-hats. Switching re-runs detection on cached stems (no re-separation). v1 preserves the original closed-hat + crash behavior.
+4. **Sensitivity** (optional) — The slider starts at tuned per-stem defaults. Drag and release to re-run detection on cached stems (left = fewer hits, right = more including quieter hits). Re-runs skip separation and typically finish in under a second.
+5. **Voice filter** (preview) — Click a drum voice label above the waveform (**kick**, **snare**, etc.) to filter preview playback. The first click isolates that voice; further clicks add voices (e.g. kick, then snare → kick + snare). Click **All** to reset. Works with MIDI, Original (isolated stems), and Both sources. Onset markers on the waveform follow the same filter.
+6. **Preview** (GetGood Drums only) — Select **GetGood Drums**, choose a **Source** mode (**MIDI** default, **Original**, or **Both**), then click **Play** to hear the remapped transcription through the bundled [Preview Kit](Preview%20Kit/) samples. Use **Both** to compare timing against the original stem. A playhead tracks playback on the waveform.
+7. Click **Save MIDI...** to write the plugin-remapped `.mid`.
 
 ### GGD Preview Kit mapping
 
@@ -113,8 +115,12 @@ The [Preview Kit](Preview%20Kit/) uses post-remap GGD Modern & Massive GM note n
 | 50 | Rack Tom (D2) | `high tom.wav` |
 | 49 | Crash L (C#2) | `crash cymbal.wav` |
 | 54 | Hat Closed (F#2) | `hi hat closed.wav` |
+| 58 | Hat Open0 (A#2) | `hi hat open.wav` |
 
-**Hi-hat preview caveat:** The default Demucs backend produces four stems (kick, snare, toms, cymbals) with no isolated hi-hat. Hi-hat events (GM 42 → GGD 54) only appear when the DSP separation backend produces a `hihat.wav` stem. Without those events, hat preview stays silent even though the sample is loaded.
+**Hi-hat notes:** The default Demucs path runs ML separation for kick/snare/toms/cymbals, then extracts a **hi-hat stem** from the original mix (6–12 kHz DSP band).
+
+- **v1 (classic):** All hat hits → GM 42 (GGD 54). Coincident crashes within 20 ms of a hat hit are dropped in favor of the hat. Ride vs crash and open vs closed are not distinguished (cymbals stem → crash).
+- **v2 (default):** Reroutes cymbal onsets that look hat-like (hi-hat stem energy at the same time) and classifies hats as closed (GM 42 → GGD 54) or open (GM 46 → GGD 58) using sustain and spectral heuristics. Real crashes without hat bleed remain GM 49.
 
 **Timing expectations:**
 
@@ -144,6 +150,7 @@ AudioToMidi/
 │   ├── separation.py            # Demucs drumsep or DSP fallback
 │   ├── onset_detection.py       # Per-stem onset + velocity extraction
 │   ├── merge.py                 # Timeline merge, tom clustering, GM output
+│   ├── transcription_v2.py      # v2 open-hat rerouting + open/closed classification
 │   ├── remap.py                 # GM → plugin note remap
 │   └── midi_writer.py           # pretty_midi file writer
 ├── mappings/                    # JSON plugin profiles (one per target)
@@ -180,8 +187,8 @@ WAV drum stem
 [1] Preprocess — resample, normalize
      │
      ▼
-[2] Source separation (Demucs drumsep or DSP)
-     │   → kick, snare, toms, cymbals stems
+[2] Source separation (Demucs drumsep + DSP hi-hat, or full DSP)
+     │   → kick, snare, toms, hihat, cymbals stems
      ▼
 [3] Per-stem onset detection (tuned thresholds per voice)
      │
@@ -192,7 +199,7 @@ WAV drum stem
 [4] Velocity extraction (amplitude → MIDI velocity curve)
      │
      ▼
-[5] Timeline merge + optional bleed suppression
+[5] Timeline merge (hat-priority dedupe; v2 adds open-hat reroute + open/closed) + optional bleed suppression
      │   → (time, GM note, velocity) events
      ▼
 [6] GM → plugin remap (JSON profile)
@@ -208,6 +215,8 @@ WAV drum stem
 | ---- | ----------------------------- |
 | 36   | Kick                          |
 | 38   | Snare                         |
+| 42   | Closed hi-hat                 |
+| 46   | Open hi-hat (v2 only)         |
 | 45   | Floor tom                     |
 | 47   | Tom fallback (single cluster) |
 | 49   | Crash cymbal                  |
@@ -255,22 +264,23 @@ Useful options: `-n` (GM note, default 36), `--delta` (onset threshold), `--wind
 ### Split a full-kit WAV into stems
 
 ```bash
-# Demucs drumsep (best quality; 4 stems: kick, snare, toms, cymbals)
+# Demucs drumsep + hybrid hi-hat extract (default; 5 stems)
 python pipeline/separation.py drums.wav -o drums_stems --backend demucs
 
-# DSP fallback (fast, no download; 5 stems including hi-hat)
+# DSP fallback (fast, no download; 5 stems)
 python pipeline/separation.py drums.wav -o drums_stems --backend dsp
 ```
 
-The Demucs backend does not separate hi-hat (it stays in the cymbals stem). Hi-hat is only available via the DSP backend.
+Demucs runs ML separation for kick/snare/toms/cymbals, then extracts `hihat.wav` from the original mix. The full DSP backend uses frequency masking for all five stems.
 
 ### Transcribe stems to General MIDI
 
 ```bash
 python pipeline/merge.py drums_stems -o drums.mid
+python pipeline/merge.py drums_stems --transcription-version v1 -o drums_v1.mid
 ```
 
-Options: `--bleed-suppression`, `--velocity-floor`, `--delta-scale` (sensitivity, same knob as the GUI slider), `--tempo`, `--plugin NAME`.
+Options: `--bleed-suppression`, `--velocity-floor`, `--delta-scale` (sensitivity, same knob as the GUI slider), `--transcription-version {v1,v2}` (default v2), `--tempo`, `--plugin NAME`.
 
 ### Remap GM MIDI to a plugin
 

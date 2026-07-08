@@ -17,8 +17,13 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
+
+import librosa
+import numpy as np
+import soundfile as sf
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -39,6 +44,74 @@ STEM_ORDER = ("kick", "snare", "toms", "hihat", "cymbals")
 DEFAULT_MIN_IOI_MS = 30.0
 DEFAULT_BLEED_WINDOW_MS = 10.0
 DEFAULT_BLEED_RATIO = 0.35
+DEFAULT_HIHAT_CYMBAL_WINDOW_MS = 20.0
+CYMBAL_HIHAT_ATTENUATION = 0.85
+
+GM_NOTE_HIHAT = 42
+GM_NOTE_CYMBALS = 49
+
+
+def _is_hihat_event(note: int, stem: str) -> bool:
+    return stem == "hihat" or note == GM_NOTE_HIHAT
+
+
+def _is_cymbal_event(note: int, stem: str) -> bool:
+    return stem == "cymbals" or note == GM_NOTE_CYMBALS
+
+
+def resolve_cymbal_hihat_collisions(
+    tagged: List[Tuple[float, int, int, str]],
+    *,
+    window_ms: float = DEFAULT_HIHAT_CYMBAL_WINDOW_MS,
+) -> List[Tuple[float, int, int, str]]:
+    """Drop cymbal/crash events coincident with hi-hat hits (hat wins)."""
+    window_s = window_ms / 1000.0
+    hat_times = [
+        time_s
+        for time_s, note, _velocity, stem in tagged
+        if _is_hihat_event(note, stem)
+    ]
+    if not hat_times:
+        return tagged
+
+    drop: set[int] = set()
+    for index, (time_s, note, _velocity, stem) in enumerate(tagged):
+        if not _is_cymbal_event(note, stem):
+            continue
+        for hat_t in hat_times:
+            if abs(time_s - hat_t) <= window_s:
+                drop.add(index)
+                break
+    return [event for index, event in enumerate(tagged) if index not in drop]
+
+
+def _pad_to_length(a: np.ndarray, length: int) -> np.ndarray:
+    if a.size >= length:
+        return a[:length]
+    out = np.zeros(length, dtype=np.float32)
+    out[: a.size] = a
+    return out
+
+
+def _cymbals_detect_path(
+    cymbals_path: Path,
+    hihat_path: Path,
+) -> tuple[str, Optional[str]]:
+    """Build a temp cymbals WAV with hi-hat energy subtracted for onset detection."""
+    cymbals, sr = librosa.load(str(cymbals_path), sr=None, mono=True)
+    hihat, _ = librosa.load(str(hihat_path), sr=sr, mono=True)
+    length = max(cymbals.size, hihat.size)
+    cymbals = _pad_to_length(cymbals, length)
+    hihat = _pad_to_length(hihat, length)
+    cleaned = cymbals - hihat * CYMBAL_HIHAT_ATTENUATION
+    peak = float(np.max(np.abs(cleaned)))
+    if peak > 1.0:
+        cleaned = cleaned / peak
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    sf.write(tmp.name, cleaned.astype(np.float32), sr)
+    tmp.close()
+    return tmp.name, tmp.name
 
 
 def merge_events(
@@ -86,11 +159,14 @@ def merge_events(
             deduped.append((time_s, note, velocity, stem))
         tagged = deduped
 
-    # 2) Ghost-note velocity floor (off by default).
+    # 2) Hi-hat vs cymbal collision: prefer hat (42) over crash (49).
+    tagged = resolve_cymbal_hihat_collisions(tagged)
+
+    # 3) Ghost-note velocity floor (off by default).
     if velocity_floor > 0:
         tagged = [e for e in tagged if e[2] >= velocity_floor]
 
-    # 3) Same-timestamp cross-stem bleed suppression (off by default).
+    # 4) Same-timestamp cross-stem bleed suppression (off by default).
     if bleed_suppression:
         window_s = bleed_window_ms / 1000.0
         drop = set()
@@ -106,20 +182,14 @@ def merge_events(
     return [(t, n, v) for (t, n, v, _stem) in tagged]
 
 
-def transcribe_stems(
+def _transcribe_stems_v1(
     stems_dir: str,
     *,
     bleed_suppression: bool = False,
     velocity_floor: int = 0,
     delta_scale: float = 1.0,
 ) -> Tuple[List[Event], dict]:
-    """Transcribe a Phase 2 separated-stems directory into merged GM events.
-
-    Reads ``manifest.json`` when present (else falls back to known ``<stem>.wav``
-    files), runs per-stem onset detection with floor/rack tom clustering, merges,
-    and returns ``(events, summary)``. ``delta_scale`` tunes onset sensitivity
-    across all stems (see ``detect_onsets_for_stem``).
-    """
+    """v1 transcription: original merge path (closed hat only, crash dedupe)."""
     stems_path = Path(stems_dir)
     manifest_path = stems_path / "manifest.json"
     if manifest_path.exists():
@@ -137,15 +207,32 @@ def transcribe_stems(
 
     stem_events: Dict[str, List[Event]] = {}
     summary: dict = {"stems": {}, "tom_k": None}
+    temp_detect_paths: List[str] = []
+    cymbals_path = stem_files.get("cymbals")
+    hihat_path = stem_files.get("hihat")
+
     for name in STEM_ORDER:
         path = stem_files.get(name)
         if path is None or not path.exists():
             continue
-        events, info = detect_stem_events(str(path), name, delta_scale=delta_scale)
+        detect_path = str(path)
+        if (
+            name == "cymbals"
+            and cymbals_path is not None
+            and hihat_path is not None
+            and hihat_path.exists()
+        ):
+            detect_path, temp_path = _cymbals_detect_path(cymbals_path, hihat_path)
+            if temp_path is not None:
+                temp_detect_paths.append(temp_path)
+        events, info = detect_stem_events(detect_path, name, delta_scale=delta_scale)
         stem_events[name] = events
         summary["stems"][name] = info
         if name == "toms":
             summary["tom_k"] = info.get("tom_k")
+
+    for temp_path in temp_detect_paths:
+        Path(temp_path).unlink(missing_ok=True)
 
     merged = merge_events(
         stem_events,
@@ -158,7 +245,37 @@ def transcribe_stems(
         note_counts[note] = note_counts.get(note, 0) + 1
     summary["total_events"] = len(merged)
     summary["note_counts"] = note_counts
+    summary["transcription_version"] = "v1"
     return merged, summary
+
+
+def transcribe_stems(
+    stems_dir: str,
+    *,
+    bleed_suppression: bool = False,
+    velocity_floor: int = 0,
+    delta_scale: float = 1.0,
+    transcription_version: str = "v2",
+) -> Tuple[List[Event], dict]:
+    """Transcribe a Phase 2 separated-stems directory into merged GM events.
+
+    ``transcription_version`` selects v1 (classic) or v2 (open-hat rerouting).
+    """
+    if transcription_version == "v1":
+        return _transcribe_stems_v1(
+            stems_dir,
+            bleed_suppression=bleed_suppression,
+            velocity_floor=velocity_floor,
+            delta_scale=delta_scale,
+        )
+    from pipeline.transcription_v2 import transcribe_stems_v2  # noqa: WPS433
+
+    return transcribe_stems_v2(
+        stems_dir,
+        bleed_suppression=bleed_suppression,
+        velocity_floor=velocity_floor,
+        delta_scale=delta_scale,
+    )
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -210,6 +327,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:
             "remap GM notes to the plugin's note numbers. Default: pure General MIDI."
         ),
     )
+    parser.add_argument(
+        "--transcription-version",
+        choices=("v1", "v2"),
+        default="v2",
+        help=(
+            "Transcription algorithm: v1 (classic closed-hat + crash) or "
+            "v2 (open-hat rerouting and open/closed classification). Default: v2."
+        ),
+    )
     return parser
 
 
@@ -225,6 +351,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         bleed_suppression=args.bleed_suppression,
         velocity_floor=args.velocity_floor,
         delta_scale=args.delta_scale,
+        transcription_version=args.transcription_version,
     )
 
     if args.plugin:

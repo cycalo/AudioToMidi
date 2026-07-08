@@ -49,6 +49,9 @@ def test_main_window_has_phase5_widgets(qapp: QApplication) -> None:
     assert not window.sensitivity_slider.isEnabled()
     assert not window.play_btn.isEnabled()
     assert not window.stop_btn.isEnabled()
+    assert window.reset_position_btn is not None
+    assert window.clear_btn is not None
+    assert not window.reset_position_btn.isEnabled()
     # Convert is disabled until a WAV is chosen.
     assert not window.convert_btn.isEnabled()
 
@@ -98,6 +101,44 @@ def test_convert_resets_elapsed_and_sensitivity(qapp: QApplication) -> None:
     assert window.elapsed_label.text() == "Elapsed: 0.0s"
     assert window._elapsed_timer.isActive()
     assert window.sensitivity_slider.value() == _SLIDER_DEFAULT
+
+
+def test_waveform_view_hides_auto_range_button(qapp: QApplication) -> None:
+    from app.ui.waveform_view import WaveformView
+
+    view = WaveformView()
+    assert view._plot.getPlotItem().buttonsHidden
+
+
+def test_clear_all_resets_ui(qapp: QApplication) -> None:
+    window = MainWindow()
+    window._wav_path = "dummy.wav"
+    window.path_edit.setText("dummy.wav")
+    window.convert_btn.setEnabled(True)
+    window._on_clear_all()
+    assert window._wav_path is None
+    assert window.path_edit.text() == ""
+    assert not window.convert_btn.isEnabled()
+
+
+def test_waveform_view_voice_filter_toggle(qapp: QApplication) -> None:
+    from app.ui.waveform_view import WaveformView
+    from pipeline.drum_voices import ALL_VOICES
+
+    view = WaveformView()
+    view.set_events([(0.0, 36, 100), (0.5, 38, 90)])
+    view._on_voice_clicked("kick")
+    assert view.voice_filter() == frozenset({"kick"})
+    view._on_voice_clicked("snare")
+    assert view.voice_filter() == frozenset({"kick", "snare"})
+    view._on_all_voices_clicked()
+    assert view.voice_filter() == ALL_VOICES
+
+
+def test_transcription_combo_defaults_to_v2(qapp: QApplication) -> None:
+    window = MainWindow()
+    assert window.transcription_combo.itemData(0) == "v2"
+    assert window.controller.transcription_version == "v2"
 
 
 def test_main_module_importable() -> None:

@@ -12,7 +12,7 @@ import logging
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Sequence, Tuple
+from typing import Dict, FrozenSet, List, Literal, Optional, Sequence, Tuple
 
 import librosa
 import numpy as np
@@ -22,6 +22,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from pipeline.drum_voices import (  # noqa: E402
+    ALL_VOICES,
+    STEM_NAME_BY_VOICE,
+    is_all_voices,
+)
 from pipeline.midi_writer import Event  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -210,6 +215,40 @@ def mix_sources(
     return _apply_peak_limiter(mixed)
 
 
+def mix_stem_wavs(
+    stems_dir: Path,
+    voices: FrozenSet[str],
+    target_sr: int,
+    *,
+    duration_hint_s: Optional[float] = None,
+) -> np.ndarray:
+    """Sum selected separated stem WAVs from ``stems_dir``."""
+    if is_all_voices(voices):
+        voice_list = list(STEM_NAME_BY_VOICE.keys())
+    else:
+        voice_list = [v for v in STEM_NAME_BY_VOICE if v in voices]
+
+    buffers: List[np.ndarray] = []
+    for voice in voice_list:
+        stem_name = STEM_NAME_BY_VOICE[voice]
+        path = stems_dir / f"{stem_name}.wav"
+        if not path.is_file():
+            continue
+        buffers.append(_load_wav_mono(path, target_sr))
+
+    if not buffers:
+        length = int((duration_hint_s or 0.0) * target_sr)
+        return np.zeros(max(length, 1), dtype=np.float32)
+
+    length = max(buf.size for buf in buffers)
+    if duration_hint_s is not None:
+        length = max(length, int(float(duration_hint_s) * target_sr))
+    out = np.zeros(length, dtype=np.float32)
+    for buf in buffers:
+        out[: buf.size] += buf
+    return _apply_peak_limiter(out)
+
+
 def build_preview_buffer(
     events: Sequence[Event],
     kit: PreviewKit,
@@ -217,6 +256,8 @@ def build_preview_buffer(
     wav_path: Optional[str] = None,
     mode: PreviewMode = "midi",
     duration_hint_s: Optional[float] = None,
+    voices: Optional[FrozenSet[str]] = None,
+    stems_dir: Optional[str] = None,
 ) -> Tuple[np.ndarray, int]:
     """Render preview audio for playback (MIDI buffer, optional original mix)."""
     midi_buf = render_preview(events, kit, duration_hint_s=duration_hint_s)
@@ -224,10 +265,22 @@ def build_preview_buffer(
     if mode == "midi":
         return midi_buf, kit.sample_rate
 
-    if wav_path is None:
-        raise ValueError("wav_path is required for original/both preview modes.")
+    if wav_path is None and stems_dir is None:
+        raise ValueError("wav_path or stems_dir is required for original/both preview modes.")
 
-    original = load_original_mono(wav_path, kit.sample_rate)
+    active_voices = voices if voices is not None else ALL_VOICES
+    if not is_all_voices(active_voices) and stems_dir:
+        original = mix_stem_wavs(
+            Path(stems_dir),
+            active_voices,
+            kit.sample_rate,
+            duration_hint_s=duration_hint_s,
+        )
+    elif wav_path is not None:
+        original = load_original_mono(wav_path, kit.sample_rate)
+    else:
+        raise ValueError("wav_path is required when no stems_dir is available.")
+
     if duration_hint_s is not None:
         target_len = max(midi_buf.size, int(duration_hint_s * kit.sample_rate))
         midi_buf = _pad_or_trim(midi_buf, target_len)

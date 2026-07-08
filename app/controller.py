@@ -14,7 +14,9 @@ import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, Dict, FrozenSet, List, Optional, Tuple
+
+import numpy as np
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
 
@@ -23,6 +25,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from app.audio_playback import AudioPlayback  # noqa: E402
+from pipeline.drum_voices import ALL_VOICES, filter_gm_events_by_voices  # noqa: E402
 from pipeline.merge import transcribe_stems  # noqa: E402
 from pipeline.midi_writer import Event, write_midi  # noqa: E402
 from pipeline.preview import (  # noqa: E402
@@ -33,6 +36,8 @@ from pipeline.preview import (  # noqa: E402
 )
 from pipeline.remap import load_profile, remap_events  # noqa: E402
 from pipeline.separation import separate  # noqa: E402
+
+PreviewCacheKey = Tuple[str, FrozenSet[str]]
 
 
 def _separation_progress_message(device: str) -> str:
@@ -52,6 +57,7 @@ class AnalysisState:
     events: List[Event] = field(default_factory=list)
     summary: dict = field(default_factory=dict)
     delta_scale: float = 1.0
+    transcription_version: str = "v2"
 
 
 class _Worker(QObject):
@@ -91,6 +97,7 @@ class PipelineController(QObject):
     previewFinished = Signal()
     previewFailed = Signal(str)
     previewPosition = Signal(float)
+    sessionReset = Signal()
 
     def __init__(self, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
@@ -105,6 +112,12 @@ class PipelineController(QObject):
         self._preview_timer = QTimer(self)
         self._preview_timer.setInterval(50)
         self._preview_timer.timeout.connect(self._poll_preview_position)
+        self._preview_cache: Dict[PreviewCacheKey, Tuple[np.ndarray, int]] = {}
+        self._preview_mode: Optional[PreviewMode] = None
+        self._pending_start_s: float = 0.0
+        self._pending_resume_playing: bool = False
+        self._transcription_version: str = "v2"
+        self._voice_filter: FrozenSet[str] = ALL_VOICES
 
     # -- configuration -----------------------------------------------------
     def set_plugin(self, plugin_id: str) -> None:
@@ -129,9 +142,58 @@ class PipelineController(QObject):
     def is_preview_playing(self) -> bool:
         return self._playback.is_playing()
 
+    def has_preview_cache(self) -> bool:
+        return bool(self._preview_cache)
+
+    @property
+    def voice_filter(self) -> FrozenSet[str]:
+        return self._voice_filter
+
+    def set_voice_filter(self, voices: FrozenSet[str]) -> None:
+        """Set active drum voices for preview playback and update audio if needed."""
+        if voices == self._voice_filter:
+            return
+        self._voice_filter = voices
+        if self._state is None or not self.preview_supported() or self.is_busy():
+            return
+        was_playing = self._playback.is_playing()
+        pos = (
+            self._playback.position_seconds()
+            if was_playing
+            else self._pending_start_s
+        )
+        mode: PreviewMode = self._preview_mode or "midi"
+        if was_playing:
+            self._preview_timer.stop()
+            self._playback.stop()
+        self._pending_start_s = pos
+        self._pending_resume_playing = was_playing
+        cache_key = self._preview_cache_key(mode)
+        if cache_key in self._preview_cache:
+            buffer, sr = self._preview_cache[cache_key]
+            duration = float(buffer.size) / sr if sr else 0.0
+            pos = max(0.0, min(pos, duration))
+            self._pending_start_s = pos
+            if was_playing:
+                self._start_preview_playback(buffer, sr, mode, pos)
+            else:
+                self.previewPosition.emit(pos)
+            return
+        self._start_preview_render(mode)
+
     def set_device(self, device: str) -> None:
         """Select the compute device for Demucs separation (``auto``, ``cpu``, ``cuda``)."""
         self._device = device
+
+    def set_transcription_version(self, version: str) -> None:
+        """Select transcription algorithm (``v1`` classic or ``v2`` improved hats)."""
+        if version not in ("v1", "v2"):
+            return
+        self._transcription_version = version
+
+    @property
+    def transcription_version(self) -> str:
+        return self._transcription_version
 
     @property
     def state(self) -> Optional[AnalysisState]:
@@ -145,6 +207,8 @@ class PipelineController(QObject):
         """Separate ``wav_path`` and transcribe its stems in a background thread."""
         if self.is_busy():
             return
+        self.preview_stop()
+        self._clear_preview_cache()
         self._discard_previous_stems()
         stems_dir = tempfile.mkdtemp(prefix="audiotomidi_")
 
@@ -152,7 +216,10 @@ class PipelineController(QObject):
             report(_separation_progress_message(self._device), 5)
             separate(wav_path, stems_dir, device=self._device)
             report("Detecting onsets...", 80)
-            events, summary = transcribe_stems(stems_dir)
+            events, summary = transcribe_stems(
+                stems_dir,
+                transcription_version=self._transcription_version,
+            )
             report("Ready for review", 100)
             return AnalysisState(
                 wav_path=wav_path,
@@ -160,6 +227,7 @@ class PipelineController(QObject):
                 events=events,
                 summary=summary,
                 delta_scale=1.0,
+                transcription_version=self._transcription_version,
             )
 
         self._start_worker(job, "analysis")
@@ -174,13 +242,45 @@ class PipelineController(QObject):
         wav_path = self._state.wav_path
 
         def job(report: Callable[[str, int], None]) -> AnalysisState:
-            events, summary = transcribe_stems(stems_dir, delta_scale=scale)
+            events, summary = transcribe_stems(
+                stems_dir,
+                delta_scale=scale,
+                transcription_version=self._transcription_version,
+            )
             return AnalysisState(
                 wav_path=wav_path,
                 stems_dir=stems_dir,
                 events=events,
                 summary=summary,
                 delta_scale=scale,
+                transcription_version=self._transcription_version,
+            )
+
+        self._start_worker(job, "detect")
+
+    def retranscribe(self) -> None:
+        """Re-run onset detection on cached stems (version or sensitivity change)."""
+        if self._state is None or self.is_busy():
+            return
+        self._clear_preview_cache()
+        scale = self._state.delta_scale
+        stems_dir = self._state.stems_dir
+        wav_path = self._state.wav_path
+        version = self._transcription_version
+
+        def job(_report: Callable[[str, int], None]) -> AnalysisState:
+            events, summary = transcribe_stems(
+                stems_dir,
+                delta_scale=scale,
+                transcription_version=version,
+            )
+            return AnalysisState(
+                wav_path=wav_path,
+                stems_dir=stems_dir,
+                events=events,
+                summary=summary,
+                delta_scale=scale,
+                transcription_version=version,
             )
 
         self._start_worker(job, "detect")
@@ -218,37 +318,101 @@ class PipelineController(QObject):
             )
             return
         if self._playback.is_playing():
-            self.preview_stop()
+            self._preview_timer.stop()
+            self._playback.stop()
 
-        wav_path = self._state.wav_path
-        events = list(self._state.events)
-        plugin_id = self._plugin_id
+        cache_key = self._preview_cache_key(mode)
+        if cache_key in self._preview_cache:
+            buffer, sr = self._preview_cache[cache_key]
+            self._start_preview_playback(buffer, sr, mode, self._pending_start_s)
+            return
 
-        def job(_report: Callable[[str, int], None]) -> tuple:
-            import librosa
+        self._pending_resume_playing = True
+        self._start_preview_render(mode)
 
-            profile = load_profile(plugin_id)
-            remapped = remap_events(events, profile)
-            kit_dir = resolve_kit_dir(profile, repo_root=REPO_ROOT)
-            kit = load_preview_kit(kit_dir)
-            duration_hint = float(librosa.get_duration(path=wav_path))
-            buffer, sr = build_preview_buffer(
-                remapped,
-                kit,
-                wav_path=wav_path,
-                mode=mode,
-                duration_hint_s=duration_hint,
-            )
-            return buffer, sr, mode
+    def preview_change_source(self, mode: PreviewMode) -> None:
+        """Switch preview source, keeping playback position when possible."""
+        if self.is_busy() or self._state is None or not self.preview_supported():
+            return
+        if mode == self._preview_mode and self._preview_cache_key(mode) in self._preview_cache:
+            return
 
-        self._start_worker(job, "preview")
+        pos = (
+            self._playback.position_seconds()
+            if self._playback.is_playing()
+            else self._pending_start_s
+        )
+        was_playing = self._playback.is_playing()
+
+        cache_key = self._preview_cache_key(mode)
+        if cache_key in self._preview_cache:
+            buffer, sr = self._preview_cache[cache_key]
+            self._preview_mode = mode
+            duration = float(buffer.size) / sr if sr else 0.0
+            pos = max(0.0, min(pos, duration))
+            self._pending_start_s = pos
+            if was_playing:
+                self._start_preview_playback(buffer, sr, mode, pos)
+            else:
+                self.previewPosition.emit(pos)
+            return
+
+        if was_playing:
+            self._preview_timer.stop()
+            self._playback.stop()
+
+        self._pending_start_s = pos
+        self._pending_resume_playing = was_playing
+        self._start_preview_render(mode)
+
+    def preview_seek(self, time_s: float) -> None:
+        """Jump preview playback to ``time_s`` seconds."""
+        mode = self._preview_mode
+        if mode is None:
+            return
+        cache_key = self._preview_cache_key(mode)
+        if cache_key not in self._preview_cache:
+            return
+        buffer, sr = self._preview_cache[cache_key]
+        duration = float(buffer.size) / sr if sr else 0.0
+        time_s = max(0.0, min(float(time_s), duration))
+        self._pending_start_s = time_s
+        in_session = self._preview_timer.isActive() or self._playback.is_playing()
+        if in_session:
+            try:
+                self._playback.play(buffer, sr, start_s=time_s)
+            except Exception as exc:  # noqa: BLE001
+                self.previewFailed.emit(str(exc))
+                return
+            if not self._preview_timer.isActive():
+                self._preview_timer.start()
+        self.previewPosition.emit(time_s)
+
+    def preview_reset_position(self) -> None:
+        """Move the preview playhead back to the start."""
+        self.preview_seek(0.0)
 
     def preview_stop(self) -> None:
         """Stop preview playback."""
         self._preview_timer.stop()
         self._playback.stop()
+        self._pending_start_s = 0.0
         self.previewPosition.emit(0.0)
         self.previewFinished.emit()
+
+    def reset_session(self) -> None:
+        """Stop playback and discard all analysis and preview state."""
+        if self.is_busy():
+            return
+        self.preview_stop()
+        self._clear_preview_cache()
+        self._preview_mode = None
+        self._pending_start_s = 0.0
+        self._pending_resume_playing = False
+        self._voice_filter = ALL_VOICES
+        self._discard_previous_stems()
+        self._state = None
+        self.sessionReset.emit()
 
     # -- teardown ----------------------------------------------------------
     def cleanup(self) -> None:
@@ -263,6 +427,62 @@ class PipelineController(QObject):
     def _discard_previous_stems(self) -> None:
         if self._state is not None and self._state.stems_dir:
             shutil.rmtree(self._state.stems_dir, ignore_errors=True)
+
+    def _clear_preview_cache(self) -> None:
+        self._preview_cache.clear()
+        self._preview_mode = None
+
+    def _preview_cache_key(self, mode: PreviewMode) -> PreviewCacheKey:
+        return (mode, self._voice_filter)
+
+    def _start_preview_render(self, mode: PreviewMode) -> None:
+        wav_path = self._state.wav_path  # type: ignore[union-attr]
+        events = list(self._state.events)  # type: ignore[union-attr]
+        stems_dir = self._state.stems_dir  # type: ignore[union-attr]
+        plugin_id = self._plugin_id
+        voices = self._voice_filter
+
+        def job(_report: Callable[[str, int], None]) -> tuple:
+            import librosa
+
+            profile = load_profile(plugin_id)
+            filtered = filter_gm_events_by_voices(events, voices)
+            remapped = remap_events(filtered, profile)
+            kit_dir = resolve_kit_dir(profile, repo_root=REPO_ROOT)
+            kit = load_preview_kit(kit_dir)
+            duration_hint = float(librosa.get_duration(path=wav_path))
+            buffer, sr = build_preview_buffer(
+                remapped,
+                kit,
+                wav_path=wav_path,
+                mode=mode,
+                duration_hint_s=duration_hint,
+                voices=voices,
+                stems_dir=stems_dir,
+            )
+            return buffer, sr, mode
+
+        self._start_worker(job, "preview")
+
+    def _start_preview_playback(
+        self,
+        buffer: np.ndarray,
+        sr: int,
+        mode: PreviewMode,
+        start_s: float,
+    ) -> None:
+        duration = float(buffer.size) / sr if sr else 0.0
+        start_s = max(0.0, min(float(start_s), duration))
+        try:
+            self._playback.play(buffer, sr, start_s=start_s)
+        except Exception as exc:  # noqa: BLE001
+            self.previewFailed.emit(str(exc))
+            return
+        self._preview_mode = mode
+        self._pending_start_s = start_s
+        self._preview_timer.start()
+        self.previewStarted.emit(mode)
+        self.previewPosition.emit(start_s)
 
     def _start_worker(
         self,
@@ -306,14 +526,13 @@ class PipelineController(QObject):
 
         if kind == "preview":
             buffer, sr, mode = result  # type: ignore[misc]
-            try:
-                self._playback.play(buffer, sr)
-            except Exception as exc:  # noqa: BLE001
-                self.previewFailed.emit(str(exc))
-                return
-            self._preview_timer.start()
-            self.previewStarted.emit(mode)
-            self.previewPosition.emit(0.0)
+            self._preview_cache[self._preview_cache_key(mode)] = (buffer, sr)
+            if self._pending_resume_playing:
+                self._start_preview_playback(buffer, sr, mode, self._pending_start_s)
+            else:
+                self._preview_mode = mode
+                self.previewPosition.emit(self._pending_start_s)
+            self._pending_resume_playing = False
             return
 
         assert isinstance(result, AnalysisState)
@@ -321,15 +540,29 @@ class PipelineController(QObject):
         if kind == "analysis":
             self.analysisFinished.emit(result)
         else:
+            self._clear_preview_cache()
             self.eventsUpdated.emit(result.events)
 
     def _poll_preview_position(self) -> None:
         if not self._playback.is_playing():
+            duration = self._playback.duration_seconds()
+            near_end = duration > 0 and self._pending_start_s >= duration - 0.05
+            # Ignore transient inactive states while a preview session is active
+            # (e.g. rapid waveform seeks restarting PortAudio).
+            if (
+                self._preview_timer.isActive()
+                and self._preview_mode is not None
+                and not near_end
+            ):
+                return
             self._preview_timer.stop()
+            self._pending_start_s = 0.0
             self.previewPosition.emit(0.0)
             self.previewFinished.emit()
             return
-        self.previewPosition.emit(self._playback.position_seconds())
+        pos = self._playback.position_seconds()
+        self._pending_start_s = pos
+        self.previewPosition.emit(pos)
 
     def _on_worker_failed(self, error: str) -> None:
         kind = self._worker_kind
