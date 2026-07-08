@@ -1,0 +1,14 @@
+{
+  "name": "GGD Modern & Massive GM",
+  "profile": "ggd",
+  "sample_rate": 44100,
+  "samples": {
+    "36": "kick.wav",
+    "38": "snare.wav",
+    "43": "low tom.wav",
+    "48": "low tom.wav",
+    "49": "crash cymbal.wav",
+    "50": "high tom.wav",
+    "54": "hi hat closed.wav"
+  }
+}

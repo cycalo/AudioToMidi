@@ -1,5 +1,5 @@
 # AudioToMidi — Drum Stem to MIDI Converter
-.venv/Scripts/python.exe app/main.py
+
 AudioToMidi is a Windows desktop application that converts a WAV drum stem into a standard MIDI file, remapped for popular virtual drum plugins. Upload a full-kit drum bus, review detected hits on an interactive waveform, tune sensitivity, and export a `.mid` ready to drag into your DAW.
 
 ## Table of Contents
@@ -28,7 +28,7 @@ AudioToMidi is a Windows desktop application that converts a WAV drum stem into 
 - **Tom pitch clustering** — Splits the toms stem into floor tom and rack tom using relative pitch clustering (k=2).
 - **Velocity mapping** — Normalizes hit amplitudes to MIDI velocities with a configurable floor so ghost notes stay audible.
 - **Plugin remapping** — Transcribes to General MIDI first, then applies a thin JSON-driven remap layer for seven target plugins.
-- **Desktop GUI** — PySide6 window with staged progress, waveform review, color-coded onset markers, and a sensitivity slider that re-detects without re-separating.
+- **Desktop GUI** — PySide6 window with staged progress, waveform review, color-coded onset markers, sensitivity slider, and GGD sample-based preview playback before export.
 - **CLI pipeline** — Each processing stage is also available as a standalone script for scripting and debugging.
 - **Dual separation backends** — Demucs drumsep (best quality, GPU-friendly) or a lightweight DSP fallback (no model download).
 - **Session caching** — Separated stems are cached under `%TEMP%\audiotomidi_`* so sensitivity tweaks are fast; orphaned temp dirs from crashed sessions are cleaned on startup.
@@ -46,6 +46,7 @@ AudioToMidi is a Windows desktop application that converts a WAV drum stem into 
 | Source separation | demucs-infer, PyTorch            |
 | Onset detection   | librosa                          |
 | MIDI              | pretty_midi                      |
+| Preview playback  | sounddevice                      |
 | Numerics          | NumPy, SciPy                     |
 | Packaging         | PyInstaller                      |
 | Testing           | pytest                           |
@@ -97,7 +98,23 @@ python app/main.py
 1. **Browse** to a drum-stem WAV, pick a target plugin, and choose a **Device** for separation: **Auto** (GPU if available), **CPU**, or **GPU** (shown only when CUDA is detected). Medium/low-confidence plugins show an inline hint (full detail lives in each profile's `notes` field under `mappings/`).
 2. Click **Convert**. Separation and onset detection run on a background thread with a staged progress bar. When finished, the waveform shows color-coded onset markers (kick / snare / toms / cymbals).
 3. **Sensitivity** (optional) — The slider starts at tuned per-stem defaults. Drag and release to re-run detection on cached stems (left = fewer hits, right = more including quieter hits). Re-runs skip separation and typically finish in under a second.
-4. Click **Save MIDI...** to write the plugin-remapped `.mid`.
+4. **Preview** (GetGood Drums only) — Select **GetGood Drums**, choose a **Source** mode (**MIDI** default, **Original**, or **Both**), then click **Play** to hear the remapped transcription through the bundled [Preview Kit](Preview%20Kit/) samples. Use **Both** to compare timing against the original stem. A playhead tracks playback on the waveform.
+5. Click **Save MIDI...** to write the plugin-remapped `.mid`.
+
+### GGD Preview Kit mapping
+
+The [Preview Kit](Preview%20Kit/) uses post-remap GGD Modern & Massive GM note numbers (same as export when GGD is selected):
+
+| GGD note | Voice | Sample file |
+| -------- | ----- | ----------- |
+| 36 | Kick (C1) | `kick.wav` |
+| 38 | Snare (D1) | `snare.wav` |
+| 43, 48 | Floor Tom 1 (G1 / C2) | `low tom.wav` |
+| 50 | Rack Tom (D2) | `high tom.wav` |
+| 49 | Crash L (C#2) | `crash cymbal.wav` |
+| 54 | Hat Closed (F#2) | `hi hat closed.wav` |
+
+**Hi-hat preview caveat:** The default Demucs backend produces four stems (kick, snare, toms, cymbals) with no isolated hi-hat. Hi-hat events (GM 42 → GGD 54) only appear when the DSP separation backend produces a `hihat.wav` stem. Without those events, hat preview stays silent even though the sample is loaded.
 
 **Timing expectations:**
 
@@ -211,7 +228,7 @@ Profiles live in `mappings/` as JSON files. Confidence reflects mapping document
 | Addictive Drums 2      | High       | Load the GM map preset in AD2                                      |
 | BFD3                   | High       | Select General MIDI keymap in BFD3                                 |
 | Steven Slate Drums 5.5 | Medium     | Load Groove Monkee GM IOMap in SSD5.5                              |
-| GetGood Drums          | Medium     | Select **GM** preset in plugin (verified vs Modern & Massive)      |
+| GetGood Drums          | Medium     | Select **GM** preset in plugin; in-app preview via Preview Kit      |
 | Drumforge              | Low        | Proprietary factory map; toms/cymbals may need manual verification |
 
 

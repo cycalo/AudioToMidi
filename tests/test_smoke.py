@@ -39,13 +39,25 @@ def test_main_window_has_phase5_widgets(qapp: QApplication) -> None:
     assert window.browse_btn is not None
     assert window.convert_btn is not None
     assert window.save_btn is not None
+    assert window.play_btn is not None
+    assert window.stop_btn is not None
+    assert window.source_combo is not None
     assert window.device_combo is not None
     assert window.device_combo.count() >= 2
-    # Save + sensitivity are disabled until an analysis has run.
+    # Save + sensitivity + preview are disabled until an analysis has run.
     assert not window.save_btn.isEnabled()
     assert not window.sensitivity_slider.isEnabled()
+    assert not window.play_btn.isEnabled()
+    assert not window.stop_btn.isEnabled()
     # Convert is disabled until a WAV is chosen.
     assert not window.convert_btn.isEnabled()
+
+
+def test_plugin_combo_defaults_to_ggd(qapp: QApplication) -> None:
+    """GGD is listed first and selected by default for preview-focused workflow."""
+    window = MainWindow()
+    assert window.plugin_combo.itemData(0) == "ggd"
+    assert window.controller.plugin_id == "ggd"
 
 
 def test_plugin_combo_lists_seven_profiles(qapp: QApplication) -> None:

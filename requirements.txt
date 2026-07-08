@@ -4,6 +4,7 @@ soundfile==0.14.0
 numpy==2.4.6
 scipy==1.18.0
 pretty_midi==0.2.11
+sounddevice==0.5.3
 pyqtgraph==0.14.0
 pyinstaller==6.21.0
 pytest==9.1.1

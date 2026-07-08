@@ -27,7 +27,7 @@ from pipeline.remap import (  # noqa: E402
 )
 
 # The GM notes the transcription pipeline actually emits (Phase 3 v1).
-PRODUCED_NOTES = {36, 38, 45, 47, 49, 50}
+PRODUCED_NOTES = {36, 38, 42, 45, 47, 49, 50}
 
 PLUGIN_PROFILES = (
     "superior_drummer_3",
@@ -75,9 +75,11 @@ def test_ggd_profile_maps_floor_toms_to_modern_massive_floor_tom_1():
     assert note_map[38] == 38
     assert note_map[49] == 49
     assert note_map[50] == 50
+    assert note_map[42] == 54
     assert note_map[45] == 43
     assert note_map[47] == 43
     assert load_profile("ggd")["confidence"] == "medium"
+    assert load_profile("ggd")["preview_kit"] == "Preview Kit"
 
 
 def test_load_profile_by_display_name():

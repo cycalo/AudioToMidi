@@ -87,6 +87,7 @@ class WaveformView(QWidget):
 
         self._wave_item: pg.PlotDataItem | None = None
         self._marker_items: List[pg.PlotDataItem] = []
+        self._playhead: pg.InfiniteLine | None = None
         self._amplitude: float = 1.0
         self._duration: Optional[float] = None
 
@@ -138,6 +139,22 @@ class WaveformView(QWidget):
             )
             self._marker_items.append(item)
 
+    def set_playhead(self, time_s: Optional[float]) -> None:
+        """Show or hide a vertical playhead at ``time_s`` seconds."""
+        if time_s is None:
+            if self._playhead is not None:
+                self._playhead.setVisible(False)
+            return
+        if self._playhead is None:
+            self._playhead = pg.InfiniteLine(
+                pos=0.0,
+                angle=90,
+                pen=pg.mkPen((255, 255, 255), width=2),
+            )
+            self._plot.addItem(self._playhead)
+        self._playhead.setPos(float(time_s))
+        self._playhead.setVisible(True)
+
     def reset_view(self) -> None:
         """Zoom and pan back to the full waveform."""
         if self._duration is None:
@@ -147,6 +164,10 @@ class WaveformView(QWidget):
 
     def clear(self) -> None:
         """Remove the waveform and all markers."""
+        self.set_playhead(None)
+        if self._playhead is not None:
+            self._plot.removeItem(self._playhead)
+            self._playhead = None
         self._clear_markers()
         if self._wave_item is not None:
             self._plot.removeItem(self._wave_item)

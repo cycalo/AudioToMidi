@@ -129,6 +129,24 @@ class MainWindow(QMainWindow):
         self.save_btn.setEnabled(False)
         self.save_btn.clicked.connect(self._on_save)
         action_row.addWidget(self.save_btn)
+        self.play_btn = QPushButton("Play", central)
+        self.play_btn.setEnabled(False)
+        self.play_btn.setToolTip(
+            "Preview remapped MIDI through the GGD Preview Kit samples."
+        )
+        self.play_btn.clicked.connect(self._on_play)
+        action_row.addWidget(self.play_btn)
+        self.stop_btn = QPushButton("Stop", central)
+        self.stop_btn.setEnabled(False)
+        self.stop_btn.clicked.connect(self._on_stop_preview)
+        action_row.addWidget(self.stop_btn)
+        action_row.addWidget(QLabel("Source:", central))
+        self.source_combo = QComboBox(central)
+        self.source_combo.addItem("MIDI", userData="midi")
+        self.source_combo.addItem("Original", userData="original")
+        self.source_combo.addItem("Both", userData="both")
+        self.source_combo.setEnabled(False)
+        action_row.addWidget(self.source_combo)
         action_row.addStretch(1)
         root.addLayout(action_row)
 
@@ -175,16 +193,21 @@ class MainWindow(QMainWindow):
         self.controller.eventsUpdated.connect(self._on_events_updated)
         self.controller.exportFinished.connect(self._on_export_finished)
         self.controller.exportFailed.connect(self._on_export_failed)
+        self.controller.previewStarted.connect(self._on_preview_started)
+        self.controller.previewFinished.connect(self._on_preview_finished)
+        self.controller.previewFailed.connect(self._on_preview_failed)
+        self.controller.previewPosition.connect(self.waveform.set_playhead)
 
     def _populate_plugins(self) -> None:
-        for stem in available_profiles():
-            if stem == "general_midi":
-                continue
+        stems = [s for s in available_profiles() if s != "general_midi"]
+        if "ggd" in stems:
+            stems.remove("ggd")
+            stems.insert(0, "ggd")
+        for stem in stems:
             try:
                 profile = load_profile(stem)
             except (ValueError, FileNotFoundError):
                 continue
-            name = profile.get("plugin", stem)
             label = self._plugin_label(profile)
             self.plugin_combo.addItem(label, userData=stem)
         if self.plugin_combo.count():
@@ -234,6 +257,7 @@ class MainWindow(QMainWindow):
         else:
             self.warning_label.setVisible(False)
         self._reset_elapsed_display()
+        self._update_preview_controls()
 
     def _on_device_changed(self, index: int) -> None:
         device = self.device_combo.itemData(index)
@@ -269,6 +293,17 @@ class MainWindow(QMainWindow):
         self._set_busy(True, keep_save=True)
         self.controller.set_delta_scale(scale)
 
+    def _on_play(self) -> None:
+        mode = self.source_combo.currentData()
+        if not mode:
+            return
+        self.status_label.setText(f"Rendering preview ({mode})...")
+        self._set_busy(True, keep_save=True, keep_preview=True)
+        self.controller.preview_play(mode)
+
+    def _on_stop_preview(self) -> None:
+        self.controller.preview_stop()
+
     # -- slots: controller signals -----------------------------------------
     def _on_progress(self, message: str, percent: int) -> None:
         self.status_label.setText(message)
@@ -283,8 +318,9 @@ class MainWindow(QMainWindow):
         self.sensitivity_slider.setEnabled(True)
         self.waveform.set_waveform(state.wav_path)
         self.waveform.set_events(state.events)
+        self._update_preview_controls()
         self.status_label.setText(
-            f"Detected {len(state.events)} events. Review, tune sensitivity, then Save MIDI."
+            f"Detected {len(state.events)} events. Review, tune sensitivity, then Play or Save MIDI."
         )
 
     def _on_analysis_failed(self, error: str) -> None:
@@ -298,6 +334,7 @@ class MainWindow(QMainWindow):
         self.sensitivity_slider.setEnabled(True)
         self.save_btn.setEnabled(True)
         self.waveform.set_events(events)
+        self._update_preview_controls()
         self.status_label.setText(f"Detected {len(events)} events after tuning.")
 
     def _on_export_finished(self, path: str) -> None:
@@ -305,6 +342,25 @@ class MainWindow(QMainWindow):
 
     def _on_export_failed(self, error: str) -> None:
         self.status_label.setText(f"Export failed: {error}")
+
+    def _on_preview_started(self, mode: str) -> None:
+        self._set_busy(False, keep_save=True)
+        self.play_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
+        self.source_combo.setEnabled(True)
+        self.status_label.setText(f"Playing preview ({mode})...")
+
+    def _on_preview_finished(self) -> None:
+        self.waveform.set_playhead(None)
+        self._update_preview_controls()
+        if self.controller.state is not None:
+            self.status_label.setText("Preview finished.")
+
+    def _on_preview_failed(self, error: str) -> None:
+        self.waveform.set_playhead(None)
+        self._set_busy(False, keep_save=True)
+        self._update_preview_controls()
+        self.status_label.setText(f"Preview failed: {error}")
 
     # -- helpers -----------------------------------------------------------
     def _reset_elapsed_display(self, *, running: bool = False) -> None:
@@ -325,7 +381,32 @@ class MainWindow(QMainWindow):
         seconds = self._elapsed.elapsed() / 1000.0
         self.elapsed_label.setText(f"Elapsed: {seconds:0.1f}s")
 
-    def _set_busy(self, busy: bool, *, keep_save: bool = False) -> None:
+    def _update_preview_controls(self) -> None:
+        has_state = self.controller.state is not None
+        preview_ok = has_state and self.controller.preview_supported()
+        playing = self.controller.is_preview_playing()
+        busy = self.controller.is_busy()
+
+        if not preview_ok:
+            self.play_btn.setEnabled(False)
+            if self.controller.plugin_id != "ggd":
+                self.play_btn.setToolTip(
+                    "Preview is available for GetGood Drums only (v1)."
+                )
+            else:
+                self.play_btn.setToolTip(
+                    "Preview remapped MIDI through the GGD Preview Kit samples."
+                )
+        else:
+            self.play_btn.setEnabled(has_state and not busy and not playing)
+            self.play_btn.setToolTip(
+                "Preview remapped MIDI through the GGD Preview Kit samples."
+            )
+
+        self.stop_btn.setEnabled(playing)
+        self.source_combo.setEnabled(has_state and preview_ok and not busy)
+
+    def _set_busy(self, busy: bool, *, keep_save: bool = False, keep_preview: bool = False) -> None:
         self.convert_btn.setEnabled(not busy and self._wav_path is not None)
         self.browse_btn.setEnabled(not busy)
         self.plugin_combo.setEnabled(not busy)
@@ -333,3 +414,8 @@ class MainWindow(QMainWindow):
         self.sensitivity_slider.setEnabled(not busy and self.controller.state is not None)
         if not keep_save:
             self.save_btn.setEnabled(not busy and self.controller.state is not None)
+        if not keep_preview:
+            self._update_preview_controls()
+        elif busy:
+            self.play_btn.setEnabled(False)
+            self.source_combo.setEnabled(False)

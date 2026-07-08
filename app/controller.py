@@ -16,14 +16,21 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from PySide6.QtCore import QObject, QThread, Signal
+from PySide6.QtCore import QObject, QThread, QTimer, Signal
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from app.audio_playback import AudioPlayback  # noqa: E402
 from pipeline.merge import transcribe_stems  # noqa: E402
 from pipeline.midi_writer import Event, write_midi  # noqa: E402
+from pipeline.preview import (  # noqa: E402
+    PreviewMode,
+    build_preview_buffer,
+    load_preview_kit,
+    resolve_kit_dir,
+)
 from pipeline.remap import load_profile, remap_events  # noqa: E402
 from pipeline.separation import separate  # noqa: E402
 
@@ -80,20 +87,47 @@ class PipelineController(QObject):
     eventsUpdated = Signal(object)  # List[Event]
     exportFinished = Signal(str)
     exportFailed = Signal(str)
+    previewStarted = Signal(str)  # mode label
+    previewFinished = Signal()
+    previewFailed = Signal(str)
+    previewPosition = Signal(float)
 
     def __init__(self, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
         self._state: Optional[AnalysisState] = None
-        self._plugin_id: str = "general_midi"
+        self._plugin_id: str = "ggd"
         self._device: str = "auto"
         self._thread: Optional[QThread] = None
         self._worker: Optional[_Worker] = None
         self._worker_kind: str = ""
+        self._busy: bool = False
+        self._playback = AudioPlayback()
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setInterval(50)
+        self._preview_timer.timeout.connect(self._poll_preview_position)
 
     # -- configuration -----------------------------------------------------
     def set_plugin(self, plugin_id: str) -> None:
         """Select the plugin profile applied at export time."""
         self._plugin_id = plugin_id
+
+    @property
+    def plugin_id(self) -> str:
+        return self._plugin_id
+
+    def preview_supported(self) -> bool:
+        """Preview playback is available for profiles with a preview kit (v1: GGD)."""
+        if self._plugin_id != "ggd":
+            return False
+        try:
+            profile = load_profile(self._plugin_id)
+            kit_dir = resolve_kit_dir(profile, repo_root=REPO_ROOT)
+            return (kit_dir / "kit.json").is_file()
+        except (ValueError, FileNotFoundError):
+            return False
+
+    def is_preview_playing(self) -> bool:
+        return self._playback.is_playing()
 
     def set_device(self, device: str) -> None:
         """Select the compute device for Demucs separation (``auto``, ``cpu``, ``cuda``)."""
@@ -104,7 +138,7 @@ class PipelineController(QObject):
         return self._state
 
     def is_busy(self) -> bool:
-        return self._thread is not None
+        return self._busy
 
     # -- analysis (separation + detection) ---------------------------------
     def run_analysis(self, wav_path: str) -> None:
@@ -170,9 +204,59 @@ class PipelineController(QObject):
             return
         self.exportFinished.emit(output_path)
 
+    # -- preview playback --------------------------------------------------
+    def preview_play(self, mode: PreviewMode) -> None:
+        """Render and play a preview of the remapped events through the preview kit."""
+        if self.is_busy():
+            return
+        if self._state is None:
+            self.previewFailed.emit("Nothing to preview yet; run Convert first.")
+            return
+        if not self.preview_supported():
+            self.previewFailed.emit(
+                "Preview is only available for GetGood Drums with a bundled Preview Kit."
+            )
+            return
+        if self._playback.is_playing():
+            self.preview_stop()
+
+        wav_path = self._state.wav_path
+        events = list(self._state.events)
+        plugin_id = self._plugin_id
+
+        def job(_report: Callable[[str, int], None]) -> tuple:
+            import librosa
+
+            profile = load_profile(plugin_id)
+            remapped = remap_events(events, profile)
+            kit_dir = resolve_kit_dir(profile, repo_root=REPO_ROOT)
+            kit = load_preview_kit(kit_dir)
+            duration_hint = float(librosa.get_duration(path=wav_path))
+            buffer, sr = build_preview_buffer(
+                remapped,
+                kit,
+                wav_path=wav_path,
+                mode=mode,
+                duration_hint_s=duration_hint,
+            )
+            return buffer, sr, mode
+
+        self._start_worker(job, "preview")
+
+    def preview_stop(self) -> None:
+        """Stop preview playback."""
+        self._preview_timer.stop()
+        self._playback.stop()
+        self.previewPosition.emit(0.0)
+        self.previewFinished.emit()
+
     # -- teardown ----------------------------------------------------------
     def cleanup(self) -> None:
         """Remove cached stems (call on application shutdown)."""
+        self.preview_stop()
+        if self._thread is not None and self._thread.isRunning():
+            self._thread.quit()
+            self._thread.wait(30_000)
         self._discard_previous_stems()
 
     # -- internals ---------------------------------------------------------
@@ -185,6 +269,8 @@ class PipelineController(QObject):
         job: Callable[[Callable[[str, int], None]], object],
         kind: str,
     ) -> None:
+        if self._thread is not None and self._thread.isRunning():
+            return
         thread = QThread()
         worker = _Worker(job)
         worker.moveToThread(thread)
@@ -200,23 +286,57 @@ class PipelineController(QObject):
         worker.failed.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         worker.failed.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(self._clear_thread_refs)
+        thread.finished.connect(self._on_thread_finished)
 
         self._thread = thread
         self._worker = worker
         self._worker_kind = kind
+        self._busy = True
         thread.start()
 
+    def _on_thread_finished(self) -> None:
+        thread = self._thread
+        self._clear_thread_refs()
+        if thread is not None:
+            thread.deleteLater()
+
     def _on_worker_finished(self, result: object) -> None:
+        kind = self._worker_kind
+        self._busy = False
+
+        if kind == "preview":
+            buffer, sr, mode = result  # type: ignore[misc]
+            try:
+                self._playback.play(buffer, sr)
+            except Exception as exc:  # noqa: BLE001
+                self.previewFailed.emit(str(exc))
+                return
+            self._preview_timer.start()
+            self.previewStarted.emit(mode)
+            self.previewPosition.emit(0.0)
+            return
+
         assert isinstance(result, AnalysisState)
         self._state = result
-        if self._worker_kind == "analysis":
+        if kind == "analysis":
             self.analysisFinished.emit(result)
         else:
             self.eventsUpdated.emit(result.events)
 
+    def _poll_preview_position(self) -> None:
+        if not self._playback.is_playing():
+            self._preview_timer.stop()
+            self.previewPosition.emit(0.0)
+            self.previewFinished.emit()
+            return
+        self.previewPosition.emit(self._playback.position_seconds())
+
     def _on_worker_failed(self, error: str) -> None:
+        kind = self._worker_kind
+        self._busy = False
+        if kind == "preview":
+            self.previewFailed.emit(error)
+            return
         self.analysisFailed.emit(error)
 
     def _clear_thread_refs(self) -> None:

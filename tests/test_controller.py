@@ -58,7 +58,9 @@ def _run_analysis(ctrl: PipelineController, wav_path: str) -> None:
 def test_run_analysis_populates_events_and_progress(qapp, tmp_path) -> None:
     ctrl = PipelineController()
     progress: list[tuple[str, int]] = []
+    busy_on_finish: list[bool] = []
     ctrl.progress.connect(lambda m, p: progress.append((m, p)))
+    ctrl.analysisFinished.connect(lambda _s: busy_on_finish.append(ctrl.is_busy()))
 
     events = [(0.0, 36, 100), (0.5, 38, 90)]
     with patch.object(controller_mod, "separate") as sep, patch.object(
@@ -68,6 +70,8 @@ def test_run_analysis_populates_events_and_progress(qapp, tmp_path) -> None:
 
     assert ctrl.state is not None
     assert len(ctrl.state.events) == 2
+    assert busy_on_finish == [False]
+    assert ctrl._thread is None
     sep.assert_called_once()
     messages = [m for m, _ in progress]
     assert any("Separating" in m for m in messages)

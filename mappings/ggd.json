@@ -2,15 +2,17 @@
   "plugin": "GetGood Drums",
   "source": "Verified against GGD Modern & Massive 'GM' preset (Mapping tab, user-confirmed July 2026)",
   "confidence": "medium",
+  "preview_kit": "Preview Kit",
   "map": {
     "36": 36,
     "38": 38,
+    "42": 54,
     "45": 43,
     "47": 43,
     "49": 49,
     "50": 50
   },
-  "notes": "Verified against Modern & Massive only: select the 'GM' mapping preset in the plugin (not Halpern or the default 'GGD' preset). Kick/snare/crash/rack tom match exactly (36/38/49/50). Our floor tom (45) and single-tom fallback (47) both remap to 43 (Floor Tom 1) — a judgment call: GGD's GM preset also has Floor Tom 2 at 41, but this pipeline emits at most two tom voices and cannot distinguish more than floor vs rack. Other GGD library titles may place floor toms differently; verify in the Mapping tab.",
+  "notes": "Verified against Modern & Massive only: select the 'GM' mapping preset in the plugin (not Halpern or the default 'GGD' preset). Kick (36/C1), snare (38/D1), closed hi-hat (42->54/F#2 Hat Closed), crash (49/C#2 Crash L), rack tom (50/D2) are verified. Floor tom (45) and single-tom fallback (47) remap to 43 (G1 Floor Tom 1); GGD also maps Floor Tom 1 to C2 (48) and Floor Tom 2 to F1 (41) but this pipeline emits at most two tom voices. Full GGD Modern & Massive GM articulations for future reference: Kick C1 (36), Snare D1 (38), Rack Tom D2 (50), Floor Tom 1 G1/C2 (43/48), Floor Tom 2 F1 (41), Hat Ching G#2 (56), Hat Closed F#2 (54), Hat Open0 A#2 (58), Hat Open1 A#1 (46), Hat Pedal Chick G#1 (44), Ride Bell F2 (53), Ride Tip D#2 (51), Crash L C#2 (49), Crash R A2 (57), China E2 (52), Splash G2 (55). Other GGD library titles may differ; verify in the Mapping tab.",
   "ui_label_suffix": "select 'GM' preset in plugin",
   "ui_hint": "Verified for GGD Modern & Massive's 'GM' preset only — floor tom accuracy may vary by library title."
 }
