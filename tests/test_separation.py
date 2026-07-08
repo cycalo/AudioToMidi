@@ -26,6 +26,7 @@ from pipeline.separation import (  # noqa: E402
     DSP_STEMS,
     MODELS_DIR,
     DRUMSEP_FILENAME,
+    device_options,
     resolve_device,
     separate,
 )
@@ -109,6 +110,13 @@ def test_unknown_backend_raises(tmp_path: Path) -> None:
 def test_resolve_device_forced() -> None:
     assert resolve_device("cpu") == "cpu"
     assert resolve_device("auto") in ("cpu", "cuda")
+
+
+def test_device_options_includes_auto_and_cpu() -> None:
+    values = [v for v, _ in device_options()]
+    assert values[:2] == ["auto", "cpu"]
+    if "cuda" in values:
+        assert values.index("cuda") == 2
 
 
 # --------------------------------------------------------------------------

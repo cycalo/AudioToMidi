@@ -75,6 +75,18 @@ def test_run_analysis_populates_events_and_progress(qapp, tmp_path) -> None:
     ctrl.cleanup()
 
 
+def test_set_device_forwards_to_separate(qapp, tmp_path) -> None:
+    ctrl = PipelineController()
+    ctrl.set_device("cuda")
+    with patch.object(controller_mod, "separate") as sep, patch.object(
+        controller_mod, "transcribe_stems", return_value=([(0.0, 36, 100)], {})
+    ):
+        _run_analysis(ctrl, str(tmp_path / "drums.wav"))
+    sep.assert_called_once()
+    assert sep.call_args.kwargs["device"] == "cuda"
+    ctrl.cleanup()
+
+
 def test_set_delta_scale_forwards_scale_and_emits_events(qapp, tmp_path) -> None:
     ctrl = PipelineController()
     with patch.object(controller_mod, "separate"), patch.object(

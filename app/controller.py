@@ -28,6 +28,14 @@ from pipeline.remap import load_profile, remap_events  # noqa: E402
 from pipeline.separation import separate  # noqa: E402
 
 
+def _separation_progress_message(device: str) -> str:
+    if device == "cuda":
+        return "Separating stems on GPU..."
+    if device == "cpu":
+        return "Separating stems on CPU (this can take a while)..."
+    return "Separating stems (auto device — GPU if available)..."
+
+
 @dataclass
 class AnalysisState:
     """Holds the result of analyzing one WAV, reused for review and export."""
@@ -77,6 +85,7 @@ class PipelineController(QObject):
         super().__init__(parent)
         self._state: Optional[AnalysisState] = None
         self._plugin_id: str = "general_midi"
+        self._device: str = "auto"
         self._thread: Optional[QThread] = None
         self._worker: Optional[_Worker] = None
         self._worker_kind: str = ""
@@ -85,6 +94,10 @@ class PipelineController(QObject):
     def set_plugin(self, plugin_id: str) -> None:
         """Select the plugin profile applied at export time."""
         self._plugin_id = plugin_id
+
+    def set_device(self, device: str) -> None:
+        """Select the compute device for Demucs separation (``auto``, ``cpu``, ``cuda``)."""
+        self._device = device
 
     @property
     def state(self) -> Optional[AnalysisState]:
@@ -102,8 +115,8 @@ class PipelineController(QObject):
         stems_dir = tempfile.mkdtemp(prefix="audiotomidi_")
 
         def job(report: Callable[[str, int], None]) -> AnalysisState:
-            report("Separating stems (this can take a while on CPU)...", 5)
-            separate(wav_path, stems_dir)
+            report(_separation_progress_message(self._device), 5)
+            separate(wav_path, stems_dir, device=self._device)
             report("Detecting onsets...", 80)
             events, summary = transcribe_stems(stems_dir)
             report("Ready for review", 100)

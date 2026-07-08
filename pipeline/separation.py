@@ -79,6 +79,30 @@ def resolve_device(device: str = "auto") -> str:
         return "cpu"
 
 
+def device_options() -> list[tuple[str, str]]:
+    """Return ``(value, label)`` pairs for GUI/CLI device selection.
+
+    Always includes ``auto`` and ``cpu``. Adds ``cuda`` when a CUDA GPU is
+    available, with the detected device name in the label when possible.
+    """
+    options: list[tuple[str, str]] = [
+        ("auto", "Auto (use GPU if available)"),
+        ("cpu", "CPU"),
+    ]
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            try:
+                gpu_name = torch.cuda.get_device_name(0)
+            except Exception:
+                gpu_name = "CUDA"
+            options.append(("cuda", f"GPU — {gpu_name}"))
+    except Exception:
+        pass
+    return options
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with open(path, "rb") as handle:

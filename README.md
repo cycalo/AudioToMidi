@@ -1,5 +1,5 @@
 # AudioToMidi — Drum Stem to MIDI Converter
-
+.venv/Scripts/python.exe app/main.py
 AudioToMidi is a Windows desktop application that converts a WAV drum stem into a standard MIDI file, remapped for popular virtual drum plugins. Upload a full-kit drum bus, review detected hits on an interactive waveform, tune sensitivity, and export a `.mid` ready to drag into your DAW.
 
 ## Table of Contents
@@ -94,7 +94,7 @@ python app/main.py
 
 **Workflow:**
 
-1. **Browse** to a drum-stem WAV and pick a target plugin from the dropdown. Medium/low-confidence plugins show an inline hint (full detail lives in each profile's `notes` field under `mappings/`).
+1. **Browse** to a drum-stem WAV, pick a target plugin, and choose a **Device** for separation: **Auto** (GPU if available), **CPU**, or **GPU** (shown only when CUDA is detected). Medium/low-confidence plugins show an inline hint (full detail lives in each profile's `notes` field under `mappings/`).
 2. Click **Convert**. Separation and onset detection run on a background thread with a staged progress bar. When finished, the waveform shows color-coded onset markers (kick / snare / toms / cymbals).
 3. **Sensitivity** (optional) — The slider starts at tuned per-stem defaults. Drag and release to re-run detection on cached stems (left = fewer hits, right = more including quieter hits). Re-runs skip separation and typically finish in under a second.
 4. Click **Save MIDI...** to write the plugin-remapped `.mid`.
@@ -102,10 +102,10 @@ python app/main.py
 **Timing expectations:**
 
 
-| Step                                    | Typical duration (~30s clip, CPU)  |
+| Step                                    | Typical duration (~30s clip)       |
 | --------------------------------------- | ---------------------------------- |
-| First Convert (includes model download) | 15–50s + one-time ~167 MB download |
-| Subsequent Converts                     | 15–50s (separation is CPU-bound)   |
+| First Convert (includes model download) | 15–50s on CPU + one-time ~167 MB download; much faster on GPU |
+| Subsequent Converts                     | ~15–50s on CPU; typically well under a minute on GPU |
 | Sensitivity re-run                      | < 1s                               |
 | Merge + remap                           | < 2s                               |
 

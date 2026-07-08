@@ -35,6 +35,7 @@ if str(REPO_ROOT) not in sys.path:
 from app.controller import PipelineController  # noqa: E402
 from app.ui.waveform_view import WaveformView  # noqa: E402
 from pipeline.remap import available_profiles, load_profile  # noqa: E402
+from pipeline.separation import device_options  # noqa: E402
 
 # Slider endpoints map to onset-sensitivity delta scales (see onset_detection).
 _SLIDER_MIN = 0
@@ -97,6 +98,20 @@ class MainWindow(QMainWindow):
         self.plugin_combo.currentIndexChanged.connect(self._on_plugin_changed)
         plugin_row.addWidget(self.plugin_combo, stretch=1)
         root.addLayout(plugin_row)
+
+        # Compute device row (Demucs separation).
+        device_row = QHBoxLayout()
+        device_row.addWidget(QLabel("Device:", central))
+        self.device_combo = QComboBox(central)
+        self.device_combo.setToolTip(
+            "Compute device for stem separation. GPU (CUDA) is only listed when "
+            "PyTorch detects a compatible NVIDIA GPU."
+        )
+        for value, label in device_options():
+            self.device_combo.addItem(label, userData=value)
+        self.device_combo.currentIndexChanged.connect(self._on_device_changed)
+        device_row.addWidget(self.device_combo, stretch=1)
+        root.addLayout(device_row)
 
         self.warning_label = QLabel("", central)
         self.warning_label.setWordWrap(True)
@@ -174,6 +189,8 @@ class MainWindow(QMainWindow):
             self.plugin_combo.addItem(label, userData=stem)
         if self.plugin_combo.count():
             self._on_plugin_changed(self.plugin_combo.currentIndex())
+        if self.device_combo.count():
+            self._on_device_changed(self.device_combo.currentIndex())
 
     @staticmethod
     def _plugin_label(profile: dict) -> str:
@@ -216,6 +233,12 @@ class MainWindow(QMainWindow):
             self.warning_label.setVisible(True)
         else:
             self.warning_label.setVisible(False)
+        self._reset_elapsed_display()
+
+    def _on_device_changed(self, index: int) -> None:
+        device = self.device_combo.itemData(index)
+        if device:
+            self.controller.set_device(device)
 
     def _on_convert(self) -> None:
         if not self._wav_path:
@@ -223,8 +246,8 @@ class MainWindow(QMainWindow):
         self._set_busy(True)
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
-        self._elapsed.restart()
-        self._elapsed_timer.start()
+        self._reset_sensitivity_slider()
+        self._reset_elapsed_display(running=True)
         self.controller.run_analysis(self._wav_path)
 
     def _on_save(self) -> None:
@@ -284,6 +307,20 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f"Export failed: {error}")
 
     # -- helpers -----------------------------------------------------------
+    def _reset_elapsed_display(self, *, running: bool = False) -> None:
+        """Clear the elapsed-time readout; optionally start a fresh timer."""
+        self._elapsed_timer.stop()
+        self._elapsed.restart()
+        self.elapsed_label.setText("Elapsed: 0.0s" if running else "")
+        if running:
+            self._elapsed_timer.start()
+
+    def _reset_sensitivity_slider(self) -> None:
+        """Return sensitivity to tuned defaults (matches a fresh Convert run)."""
+        self.sensitivity_slider.blockSignals(True)
+        self.sensitivity_slider.setValue(_SLIDER_DEFAULT)
+        self.sensitivity_slider.blockSignals(False)
+
     def _tick_elapsed(self) -> None:
         seconds = self._elapsed.elapsed() / 1000.0
         self.elapsed_label.setText(f"Elapsed: {seconds:0.1f}s")
@@ -292,6 +329,7 @@ class MainWindow(QMainWindow):
         self.convert_btn.setEnabled(not busy and self._wav_path is not None)
         self.browse_btn.setEnabled(not busy)
         self.plugin_combo.setEnabled(not busy)
+        self.device_combo.setEnabled(not busy)
         self.sensitivity_slider.setEnabled(not busy and self.controller.state is not None)
         if not keep_save:
             self.save_btn.setEnabled(not busy and self.controller.state is not None)

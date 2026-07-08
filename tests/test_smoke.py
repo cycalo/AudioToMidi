@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from PySide6.QtWidgets import QApplication
@@ -13,7 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from app.ui.main_window import MainWindow  # noqa: E402
+from app.ui.main_window import MainWindow, _SLIDER_DEFAULT, _SLIDER_MIN  # noqa: E402
 
 
 @pytest.fixture(scope="session")
@@ -38,6 +39,8 @@ def test_main_window_has_phase5_widgets(qapp: QApplication) -> None:
     assert window.browse_btn is not None
     assert window.convert_btn is not None
     assert window.save_btn is not None
+    assert window.device_combo is not None
+    assert window.device_combo.count() >= 2
     # Save + sensitivity are disabled until an analysis has run.
     assert not window.save_btn.isEnabled()
     assert not window.sensitivity_slider.isEnabled()
@@ -62,6 +65,27 @@ def test_waveform_view_constructs(qapp: QApplication) -> None:
     view = WaveformView()
     view.clear()
     view.set_events([])
+
+
+def test_elapsed_timer_resets_on_plugin_change(qapp: QApplication) -> None:
+    window = MainWindow()
+    window.elapsed_label.setText("Elapsed: 42.0s")
+    window._elapsed_timer.start()
+    window._on_plugin_changed(0)
+    assert window.elapsed_label.text() == ""
+    assert not window._elapsed_timer.isActive()
+
+
+def test_convert_resets_elapsed_and_sensitivity(qapp: QApplication) -> None:
+    window = MainWindow()
+    window._wav_path = "dummy.wav"
+    window.sensitivity_slider.setValue(_SLIDER_MIN)
+    window.elapsed_label.setText("Elapsed: 10.0s")
+    with patch.object(window.controller, "run_analysis"):
+        window._on_convert()
+    assert window.elapsed_label.text() == "Elapsed: 0.0s"
+    assert window._elapsed_timer.isActive()
+    assert window.sensitivity_slider.value() == _SLIDER_DEFAULT
 
 
 def test_main_module_importable() -> None:
