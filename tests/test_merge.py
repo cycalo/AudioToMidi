@@ -127,6 +127,68 @@ def test_merge_bleed_keeps_loud_coincident() -> None:
     assert len(merged) == 2
 
 
+def test_apply_stem_dominance_drops_bleed() -> None:
+    from pipeline.merge import apply_stem_dominance
+
+    sr = 1000
+    t = 0.5
+    kick = np.zeros(sr, dtype=np.float32)
+    snare = np.zeros(sr, dtype=np.float32)
+    start = int(t * sr)
+    kick[start : start + 20] = 1.0
+    snare[start : start + 20] = 0.2  # quieter bleed on snare stem
+    stem_events = {
+        "kick": [(t, 36, 100)],
+        "snare": [(t, 38, 40)],
+    }
+    audio = {"kick": (kick, sr), "snare": (snare, sr)}
+    out = apply_stem_dominance(stem_events, audio, dominance_ratio=0.70)
+    assert out["kick"] == [(t, 36, 100)]
+    assert out["snare"] == []
+
+
+def test_relative_peak_floor_drops_weak_onsets() -> None:
+    from pipeline.onset_detection import filter_onsets_by_relative_peak
+
+    sr = 1000
+    y = np.zeros(sr, dtype=np.float32)
+    y[100:120] = 1.0
+    y[500:520] = 0.05
+    kept = filter_onsets_by_relative_peak(
+        y, sr, [0.1, 0.5], relative_peak_floor=0.10, window_ms=20.0
+    )
+    assert list(kept) == [pytest.approx(0.1)]
+
+
+def test_relative_peak_floor_uses_look_ahead_after_backtrack() -> None:
+    """Backtracked onsets land before the crack; a short window would miss it."""
+    from pipeline.onset_detection import filter_onsets_by_relative_peak
+
+    sr = 1000
+    y = np.zeros(2 * sr, dtype=np.float32)
+    # Onset marked at 0.10s, but energy arrives ~35ms later (snare crack).
+    y[135:160] = 0.8
+    # A true quiet bleed at 1.0s with energy immediately at the mark.
+    y[1000:1020] = 0.05
+    kept_short = filter_onsets_by_relative_peak(
+        y, sr, [0.10, 1.0], relative_peak_floor=0.10, window_ms=20.0
+    )
+    kept_long = filter_onsets_by_relative_peak(
+        y, sr, [0.10, 1.0], relative_peak_floor=0.10, window_ms=50.0
+    )
+    # Short window only hears the bleed; long window keeps the real snare.
+    assert list(kept_short) == [pytest.approx(1.0)]
+    assert list(kept_long) == [pytest.approx(0.10)]
+
+
+def test_effective_relative_peak_floor_eases_with_sensitivity() -> None:
+    from pipeline.onset_detection import effective_relative_peak_floor
+
+    assert effective_relative_peak_floor(0.10, 1.0) == pytest.approx(0.10)
+    assert effective_relative_peak_floor(0.10, 0.25) < 0.10
+    assert effective_relative_peak_floor(0.10, 2.0) > 0.10
+
+
 def test_hat_priority_dedupe_drops_coincident_crash() -> None:
     events = {"hihat": [(1.0, 42, 80)], "cymbals": [(1.01, 49, 100)]}
     merged = merge_events(events, apply_min_ioi=False)
@@ -158,8 +220,8 @@ def test_pipeline_real_stems(tmp_path: Path) -> None:
     notes_present = {n for _, n, _ in events}
     assert 36 in notes_present, "kick missing"
     assert 38 in notes_present, "snare missing"
-    assert 49 in notes_present, "cymbals missing"
     assert notes_present & (set(TOM_NOTES) | {TOM_NOTE_FALLBACK}), "no tom notes"
+    assert 42 not in notes_present and 46 not in notes_present and 49 not in notes_present
 
     # Per-voice min-IOI respected (kick/snare 30 ms).
     for target, gap in ((36, 0.030), (38, 0.030)):

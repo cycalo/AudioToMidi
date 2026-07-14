@@ -57,7 +57,7 @@ class AnalysisState:
     events: List[Event] = field(default_factory=list)
     summary: dict = field(default_factory=dict)
     delta_scale: float = 1.0
-    transcription_version: str = "v2"
+    transcription_version: str = "primary"
 
 
 class _Worker(QObject):
@@ -116,7 +116,7 @@ class PipelineController(QObject):
         self._preview_mode: Optional[PreviewMode] = None
         self._pending_start_s: float = 0.0
         self._pending_resume_playing: bool = False
-        self._transcription_version: str = "v2"
+        self._transcription_version: str = "primary"
         self._voice_filter: FrozenSet[str] = ALL_VOICES
 
     # -- configuration -----------------------------------------------------
@@ -186,10 +186,8 @@ class PipelineController(QObject):
         self._device = device
 
     def set_transcription_version(self, version: str) -> None:
-        """Select transcription algorithm (``v1`` classic or ``v2`` improved hats)."""
-        if version not in ("v1", "v2"):
-            return
-        self._transcription_version = version
+        """Kept for API compatibility; detection is always kick/snare/toms."""
+        self._transcription_version = version or "primary"
 
     @property
     def transcription_version(self) -> str:

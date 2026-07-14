@@ -46,6 +46,9 @@ def test_filter_gm_events_by_voices() -> None:
     events = [(0.0, 36, 100), (0.5, 38, 90), (1.0, 49, 80)]
     filtered = filter_gm_events_by_voices(events, frozenset({"kick"}))
     assert filtered == [(0.0, 36, 100)]
+    # Unknown / retired metal notes are dropped when filtering.
+    filtered_all_known = filter_gm_events_by_voices(events, frozenset({"kick", "snare", "toms"}))
+    assert filtered_all_known == [(0.0, 36, 100), (0.5, 38, 90)]
 
 
 def test_voices_label() -> None:

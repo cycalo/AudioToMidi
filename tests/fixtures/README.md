@@ -35,24 +35,20 @@ voice (kick separates cleanest; toms/cymbals are the weakest link).
 
 ## Phase 3 transcription notes (stems -> GM MIDI)
 
-Generate a MIDI from a separated-stems directory and play it over the original:
+Transcription detects **kick / snare / toms only** (hi-hat and cymbals are
+ignored). Bleed is reduced with a relative peak floor and cross-stem dominance
+gate.
 
 ```bash
 python pipeline/merge.py tests/fixtures/drums_1_stems -o tests/fixtures/drums_1.mid
 ```
 
-Observations on the four demucs fixtures (default settings, bleed suppression off):
+`Drum Sample.wav` (acoustic kit, ~164s) after snare peak-window fix:
 
-| Fixture | Events | kick(36) | snare(38) | toms(45/50) | cymbals(49) | tom k |
-|---|---|---|---|---|---|---|
-| drums_1 | 175 | 43 | 39 | 37/25 | 31 | 2 |
-| drums_2 | 339 | 92 | 101 | 63/36 | 47 | 2 |
-| drums_3 | 214 | 52 | 50 | 30/15 | 67 | 2 |
-| drums_4 | 221 | 61 | 58 | 17/19 | 66 | 2 |
+| Events | kick(36) | snare(38) | toms(45/50) | hats/cymbals |
+|---|---|---|---|---|
+| ~518 | ~322 | ~112 | ~13/71 | none |
 
-- All four use k=2 floor/rack tom clustering (GM 45 low + GM 50 high).
-- Tom onset counts run high, consistent with cymbal/snare bleed into the toms stem
-  (Section 7 known limitation). Enable `--bleed-suppression` or raise
-  `--velocity-floor` to trim it once validated by ear.
-- Transcription **v2** (default) may emit GM 46 (open hi-hat) in addition to 42/49;
-  compare with `--transcription-version v1` on the same stems dir when evaluating hat/crash accuracy.
+Snare look-ahead for the relative-peak gate is 50 ms (kick 25 ms) so backtracked
+onsets still measure the real attack. Sensitivity also eases that gate toward
+"More".

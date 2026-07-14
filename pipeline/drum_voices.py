@@ -6,7 +6,9 @@ from typing import Dict, FrozenSet, Iterable, List, Sequence, Tuple
 
 Event = Tuple[float, int, int]
 
-VOICE_ORDER = ("kick", "snare", "toms", "cymbals", "hihat")
+# Detection targets: acoustic kick / snare / toms only. Hats and cymbals are
+# intentionally out of scope — they bleed heavily and hurt accuracy.
+VOICE_ORDER = ("kick", "snare", "toms")
 ALL_VOICES: FrozenSet[str] = frozenset(VOICE_ORDER)
 
 # General MIDI notes emitted by the transcription pipeline.
@@ -16,17 +18,12 @@ GM_NOTE_TO_VOICE: Dict[int, str] = {
     45: "toms",
     47: "toms",
     50: "toms",
-    49: "cymbals",
-    42: "hihat",
-    46: "hihat",
 }
 
 STEM_NAME_BY_VOICE: Dict[str, str] = {
     "kick": "kick",
     "snare": "snare",
     "toms": "toms",
-    "cymbals": "cymbals",
-    "hihat": "hihat",
 }
 
 
@@ -52,11 +49,15 @@ def filter_gm_events_by_voices(
 ) -> List[Event]:
     """Keep only events whose GM note maps to an active voice."""
     if is_all_voices(voices):
-        return list(events)
+        return [
+            event
+            for event in events
+            if GM_NOTE_TO_VOICE.get(int(event[1])) is not None
+        ]
     return [
         event
         for event in events
-        if GM_NOTE_TO_VOICE.get(int(event[1]), "cymbals") in voices
+        if GM_NOTE_TO_VOICE.get(int(event[1])) in voices
     ]
 
 

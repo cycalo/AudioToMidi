@@ -76,17 +76,30 @@ class StemPreset:
     wait_ms: float  # min spacing enforced during peak-picking
     min_ioi_ms: float  # min inter-onset interval enforced later in the merge step
     gm_note: Optional[int]  # fixed GM note, or None for toms (assigned by clustering)
+    # Peak / velocity measurement window after the (often backtracked) onset.
+    # Snares need a longer look-ahead: backtrack lands before the crack, so a
+    # 20 ms window measures near-silence and the relative-peak gate drops real hits.
+    peak_window_ms: float = DEFAULT_WINDOW_MS
 
 
-# Kick/snare are clean fast transients that tolerate a low threshold; cymbals are
-# noisy and sustained, so they need a higher threshold and longer wait to avoid
-# retriggering across the decay wash. Bands reject cross-stem bleed.
+# Voices the pipeline actually detects. Hats/cymbals remain in STEM_PRESETS for
+# legacy helpers/tests but are ignored by transcription.
+PRIMARY_STEMS: Tuple[str, ...] = ("kick", "snare", "toms")
+
+# Relative peak floor: drop onsets whose attack peak is below this fraction of
+# the loudest onset peak in the same stem. Cuts bleed ghosts that still clear
+# the onset detector (especially snare picking up kick thump).
+DEFAULT_RELATIVE_PEAK_FLOOR = 0.10
+
+# Kick/snare are clean fast transients; toms need a slightly longer wait for
+# ringing. Snare/tom peak windows are longer so backtracked onsets still catch
+# the attack transient used by the relative-peak bleed gate.
 STEM_PRESETS: Dict[str, StemPreset] = {
-    "kick": StemPreset("kick", 20.0, 200.0, 0.07, 30.0, 30.0, 36),
-    "snare": StemPreset("snare", 150.0, 5000.0, 0.06, 30.0, 30.0, 38),
-    "toms": StemPreset("toms", 60.0, 500.0, 0.07, 45.0, 45.0, None),
+    "kick": StemPreset("kick", 20.0, 200.0, 0.07, 30.0, 30.0, 36, peak_window_ms=25.0),
+    "snare": StemPreset("snare", 150.0, 5000.0, 0.08, 30.0, 30.0, 38, peak_window_ms=50.0),
+    "toms": StemPreset("toms", 60.0, 500.0, 0.09, 45.0, 45.0, None, peak_window_ms=45.0),
+    # Legacy metal presets (not used by primary transcription).
     "cymbals": StemPreset("cymbals", 3000.0, 16000.0, 0.12, 70.0, 70.0, 49),
-    # Hi-hat only exists on the DSP separation path; secondary target for now.
     "hihat": StemPreset("hihat", 6000.0, 12000.0, 0.10, 60.0, 60.0, 42),
 }
 
@@ -364,27 +377,102 @@ def min_ioi_by_note() -> Dict[int, float]:
     return mapping
 
 
+def onset_peak_amplitudes(
+    y: np.ndarray,
+    sr: int,
+    onset_times: Sequence[float],
+    *,
+    window_ms: float = DEFAULT_WINDOW_MS,
+) -> np.ndarray:
+    """Absolute peak amplitude in a short window after each onset."""
+    onset_times = np.asarray(onset_times, dtype=float)
+    if onset_times.size == 0:
+        return np.array([], dtype=float)
+    window_samples = max(1, int(sr * window_ms / 1000.0))
+    peaks = np.empty(onset_times.size, dtype=float)
+    for i, t in enumerate(onset_times):
+        start = max(0, int(t * sr))
+        end = min(len(y), start + window_samples)
+        segment = y[start:end]
+        peaks[i] = float(np.max(np.abs(segment))) if segment.size else 0.0
+    return peaks
+
+
+def filter_onsets_by_relative_peak(
+    y: np.ndarray,
+    sr: int,
+    onset_times: Sequence[float],
+    *,
+    relative_peak_floor: float = DEFAULT_RELATIVE_PEAK_FLOOR,
+    window_ms: float = DEFAULT_WINDOW_MS,
+) -> np.ndarray:
+    """Keep onsets whose peak is at least ``relative_peak_floor`` of stem max peak.
+
+    ``window_ms`` should be long enough to cover the attack after a backtracked
+    onset (snares often need ~40–50 ms). ``relative_peak_floor <= 0`` disables
+    the gate and returns all onsets.
+    """
+    onset_times = np.asarray(onset_times, dtype=float)
+    if onset_times.size == 0 or relative_peak_floor <= 0.0:
+        return onset_times
+    peaks = onset_peak_amplitudes(y, sr, onset_times, window_ms=window_ms)
+    peak_max = float(peaks.max()) if peaks.size else 0.0
+    if peak_max <= 0.0:
+        return np.array([], dtype=float)
+    keep = peaks >= (peak_max * float(relative_peak_floor))
+    return onset_times[keep]
+
+
+def effective_relative_peak_floor(
+    relative_peak_floor: float,
+    delta_scale: float,
+) -> float:
+    """Ease the peak floor when sensitivity is increased (lower delta_scale).
+
+    At ``delta_scale=1`` the configured floor is unchanged. Toward "More"
+    (0.25) the floor drops so quieter real hits survive; toward "Fewer" (2.0)
+    it rises to reject more bleed.
+    """
+    if relative_peak_floor <= 0.0:
+        return 0.0
+    scale = float(min(max(delta_scale, DELTA_SCALE_MIN), DELTA_SCALE_MAX))
+    # 0.25 → 0.625×, 1.0 → 1.0×, 2.0 → 1.5×
+    return float(relative_peak_floor) * (0.5 + 0.5 * scale)
+
+
 def detect_stem_events(
     path: str,
     stem_name: str,
     *,
-    window_ms: float = DEFAULT_WINDOW_MS,
+    window_ms: Optional[float] = None,
     delta_scale: float = 1.0,
+    relative_peak_floor: float = DEFAULT_RELATIVE_PEAK_FLOOR,
 ) -> Tuple[List[Event], dict]:
     """Detect events for one separated stem, assigning GM notes.
 
     For toms, notes are assigned by floor/rack pitch clustering; for other stems the
     preset's fixed GM note is used. ``delta_scale`` tunes onset sensitivity (see
-    ``detect_onsets_for_stem``). Returns ``(events, info)`` where ``info`` holds
-    the stem name, onset count, and (for toms) the chosen cluster count ``tom_k``.
+    ``detect_onsets_for_stem``). ``relative_peak_floor`` drops weak bleed ghosts
+    relative to the loudest hit in this stem (scaled by ``delta_scale`` so the
+    UI sensitivity slider can recover quieter snares). Returns ``(events, info)``.
     """
     preset = STEM_PRESETS.get(stem_name)
     if preset is None:
         return [], {"stem": stem_name, "onsets": 0, "tom_k": None, "skipped": True}
 
+    peak_window = float(preset.peak_window_ms if window_ms is None else window_ms)
     y, sr = load_audio(path)
     onset_times = detect_onsets_for_stem(y, sr, preset, delta_scale=delta_scale)
-    velocities = extract_velocities(y, sr, onset_times, window_ms=window_ms)
+    raw_count = int(len(onset_times))
+    floor = effective_relative_peak_floor(relative_peak_floor, delta_scale)
+    onset_times = filter_onsets_by_relative_peak(
+        y,
+        sr,
+        onset_times,
+        relative_peak_floor=floor,
+        window_ms=peak_window,
+    )
+    velocities = extract_velocities(y, sr, onset_times, window_ms=peak_window)
 
     if stem_name == "toms":
         notes, tom_k = assign_tom_notes(y, sr, onset_times)
@@ -396,7 +484,14 @@ def detect_stem_events(
         (float(t), int(note), int(v))
         for t, note, v in zip(onset_times, notes, velocities)
     ]
-    return events, {"stem": stem_name, "onsets": len(events), "tom_k": tom_k}
+    return events, {
+        "stem": stem_name,
+        "onsets": len(events),
+        "raw_onsets": raw_count,
+        "peak_window_ms": peak_window,
+        "relative_peak_floor": floor,
+        "tom_k": tom_k,
+    }
 
 
 def transcribe(

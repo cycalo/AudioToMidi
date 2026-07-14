@@ -31,15 +31,17 @@ if str(REPO_ROOT) not in sys.path:
 
 from pipeline.midi_writer import DEFAULT_TEMPO, write_midi  # noqa: E402
 from pipeline.onset_detection import (  # noqa: E402
-    STEM_PRESETS,
+    PRIMARY_STEMS,
+    DEFAULT_RELATIVE_PEAK_FLOOR,
     Event,
     detect_stem_events,
+    load_audio,
     min_ioi_by_note,
 )
 from pipeline.remap import load_profile, remap_events  # noqa: E402
 
-# Deterministic order in which stems are processed / merged.
-STEM_ORDER = ("kick", "snare", "toms", "hihat", "cymbals")
+# Detection order: kick / snare / toms only (hats & cymbals out of scope).
+STEM_ORDER = PRIMARY_STEMS
 
 DEFAULT_MIN_IOI_MS = 30.0
 DEFAULT_BLEED_WINDOW_MS = 10.0
@@ -47,8 +49,58 @@ DEFAULT_BLEED_RATIO = 0.35
 DEFAULT_HIHAT_CYMBAL_WINDOW_MS = 20.0
 CYMBAL_HIHAT_ATTENUATION = 0.85
 
+# Cross-stem dominance: keep an onset only if its stem's local energy is at
+# least this fraction of the loudest primary stem at the same time.
+DEFAULT_DOMINANCE_RATIO = 0.70
+DEFAULT_DOMINANCE_WINDOW_MS = 25.0
+
 GM_NOTE_HIHAT = 42
 GM_NOTE_CYMBALS = 49
+
+
+def _stem_rms_at(
+    y: np.ndarray,
+    sr: int,
+    time_s: float,
+    *,
+    window_ms: float = DEFAULT_DOMINANCE_WINDOW_MS,
+) -> float:
+    start = max(0, int(time_s * sr))
+    end = min(len(y), start + max(1, int(sr * window_ms / 1000.0)))
+    segment = y[start:end]
+    if segment.size == 0:
+        return 0.0
+    return float(np.sqrt(np.mean(np.square(segment))))
+
+
+def apply_stem_dominance(
+    stem_events: Dict[str, List[Event]],
+    stem_audio: Dict[str, Tuple[np.ndarray, int]],
+    *,
+    dominance_ratio: float = DEFAULT_DOMINANCE_RATIO,
+    window_ms: float = DEFAULT_DOMINANCE_WINDOW_MS,
+) -> Dict[str, List[Event]]:
+    """Drop onsets where another primary stem is clearly louder at that time.
+
+    This removes kick→snare / kick→tom bleed that survives relative-peak gating
+    because it is still strong on the wrong stem in absolute terms.
+    """
+    if dominance_ratio <= 0.0 or not stem_audio:
+        return stem_events
+
+    filtered: Dict[str, List[Event]] = {}
+    for stem, events in stem_events.items():
+        kept: List[Event] = []
+        for time_s, note, velocity in events:
+            energies: Dict[str, float] = {}
+            for other, (y, sr) in stem_audio.items():
+                energies[other] = _stem_rms_at(y, sr, time_s, window_ms=window_ms)
+            own = energies.get(stem, 0.0)
+            peak = max(energies.values()) if energies else 0.0
+            if peak <= 0.0 or own >= dominance_ratio * peak:
+                kept.append((time_s, note, velocity))
+        filtered[stem] = kept
+    return filtered
 
 
 def _is_hihat_event(note: int, stem: str) -> bool:
@@ -182,14 +234,16 @@ def merge_events(
     return [(t, n, v) for (t, n, v, _stem) in tagged]
 
 
-def _transcribe_stems_v1(
+def _transcribe_primary_stems(
     stems_dir: str,
     *,
     bleed_suppression: bool = False,
     velocity_floor: int = 0,
     delta_scale: float = 1.0,
+    relative_peak_floor: float = DEFAULT_RELATIVE_PEAK_FLOOR,
+    dominance_ratio: float = DEFAULT_DOMINANCE_RATIO,
 ) -> Tuple[List[Event], dict]:
-    """v1 transcription: original merge path (closed hat only, crash dedupe)."""
+    """Kick / snare / tom transcription with bleed hardening."""
     stems_path = Path(stems_dir)
     manifest_path = stems_path / "manifest.json"
     if manifest_path.exists():
@@ -197,42 +251,49 @@ def _transcribe_stems_v1(
         stem_files = {
             name: stems_path / filename
             for name, filename in manifest.get("stems", {}).items()
+            if name in PRIMARY_STEMS
         }
     else:
         stem_files = {
             name: stems_path / f"{name}.wav"
-            for name in STEM_PRESETS
+            for name in PRIMARY_STEMS
             if (stems_path / f"{name}.wav").exists()
         }
 
     stem_events: Dict[str, List[Event]] = {}
+    stem_audio: Dict[str, Tuple[np.ndarray, int]] = {}
     summary: dict = {"stems": {}, "tom_k": None}
-    temp_detect_paths: List[str] = []
-    cymbals_path = stem_files.get("cymbals")
-    hihat_path = stem_files.get("hihat")
 
     for name in STEM_ORDER:
         path = stem_files.get(name)
         if path is None or not path.exists():
             continue
-        detect_path = str(path)
-        if (
-            name == "cymbals"
-            and cymbals_path is not None
-            and hihat_path is not None
-            and hihat_path.exists()
-        ):
-            detect_path, temp_path = _cymbals_detect_path(cymbals_path, hihat_path)
-            if temp_path is not None:
-                temp_detect_paths.append(temp_path)
-        events, info = detect_stem_events(detect_path, name, delta_scale=delta_scale)
+        events, info = detect_stem_events(
+            str(path),
+            name,
+            delta_scale=delta_scale,
+            relative_peak_floor=relative_peak_floor,
+        )
         stem_events[name] = events
         summary["stems"][name] = info
         if name == "toms":
             summary["tom_k"] = info.get("tom_k")
+        stem_audio[name] = load_audio(str(path))
 
-    for temp_path in temp_detect_paths:
-        Path(temp_path).unlink(missing_ok=True)
+    if dominance_ratio > 0.0 and stem_audio:
+        before = {name: len(ev) for name, ev in stem_events.items()}
+        stem_events = apply_stem_dominance(
+            stem_events,
+            stem_audio,
+            dominance_ratio=dominance_ratio,
+        )
+        summary["dominance"] = {
+            "ratio": dominance_ratio,
+            "before": before,
+            "after": {name: len(ev) for name, ev in stem_events.items()},
+        }
+        for name, info in summary["stems"].items():
+            info["onsets"] = len(stem_events.get(name, []))
 
     merged = merge_events(
         stem_events,
@@ -245,8 +306,25 @@ def _transcribe_stems_v1(
         note_counts[note] = note_counts.get(note, 0) + 1
     summary["total_events"] = len(merged)
     summary["note_counts"] = note_counts
-    summary["transcription_version"] = "v1"
+    summary["transcription_version"] = "primary"
+    summary["voices"] = list(PRIMARY_STEMS)
     return merged, summary
+
+
+def _transcribe_stems_v1(
+    stems_dir: str,
+    *,
+    bleed_suppression: bool = False,
+    velocity_floor: int = 0,
+    delta_scale: float = 1.0,
+) -> Tuple[List[Event], dict]:
+    """Legacy path retained for hat/cymbal unit tests; prefer primary stems."""
+    return _transcribe_primary_stems(
+        stems_dir,
+        bleed_suppression=bleed_suppression,
+        velocity_floor=velocity_floor,
+        delta_scale=delta_scale,
+    )
 
 
 def transcribe_stems(
@@ -255,26 +333,24 @@ def transcribe_stems(
     bleed_suppression: bool = False,
     velocity_floor: int = 0,
     delta_scale: float = 1.0,
-    transcription_version: str = "v2",
+    transcription_version: str = "primary",
+    relative_peak_floor: float = DEFAULT_RELATIVE_PEAK_FLOOR,
+    dominance_ratio: float = DEFAULT_DOMINANCE_RATIO,
 ) -> Tuple[List[Event], dict]:
-    """Transcribe a Phase 2 separated-stems directory into merged GM events.
+    """Transcribe separated stems into merged GM events (kick / snare / toms).
 
-    ``transcription_version`` selects v1 (classic) or v2 (open-hat rerouting).
+    ``transcription_version`` is accepted for API compatibility; hats/cymbals are
+    no longer detected. Pass ``relative_peak_floor=0`` / ``dominance_ratio=0`` to
+    disable the bleed gates (useful for debugging).
     """
-    if transcription_version == "v1":
-        return _transcribe_stems_v1(
-            stems_dir,
-            bleed_suppression=bleed_suppression,
-            velocity_floor=velocity_floor,
-            delta_scale=delta_scale,
-        )
-    from pipeline.transcription_v2 import transcribe_stems_v2  # noqa: WPS433
-
-    return transcribe_stems_v2(
+    del transcription_version  # hats/cymbals path retired
+    return _transcribe_primary_stems(
         stems_dir,
         bleed_suppression=bleed_suppression,
         velocity_floor=velocity_floor,
         delta_scale=delta_scale,
+        relative_peak_floor=relative_peak_floor,
+        dominance_ratio=dominance_ratio,
     )
 
 
@@ -328,12 +404,22 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--transcription-version",
-        choices=("v1", "v2"),
-        default="v2",
+        "--relative-peak-floor",
+        type=float,
+        default=DEFAULT_RELATIVE_PEAK_FLOOR,
         help=(
-            "Transcription algorithm: v1 (classic closed-hat + crash) or "
-            "v2 (open-hat rerouting and open/closed classification). Default: v2."
+            "Drop onsets weaker than this fraction of the loudest peak in the "
+            f"same stem (default {DEFAULT_RELATIVE_PEAK_FLOOR}; 0 disables)."
+        ),
+    )
+    parser.add_argument(
+        "--dominance-ratio",
+        type=float,
+        default=DEFAULT_DOMINANCE_RATIO,
+        help=(
+            "Keep an onset only if its stem energy is at least this fraction of "
+            f"the loudest primary stem at that time (default {DEFAULT_DOMINANCE_RATIO}; "
+            "0 disables)."
         ),
     )
     return parser
@@ -351,7 +437,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         bleed_suppression=args.bleed_suppression,
         velocity_floor=args.velocity_floor,
         delta_scale=args.delta_scale,
-        transcription_version=args.transcription_version,
+        relative_peak_floor=args.relative_peak_floor,
+        dominance_ratio=args.dominance_ratio,
     )
 
     if args.plugin:

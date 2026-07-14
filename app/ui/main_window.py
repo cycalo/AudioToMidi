@@ -114,20 +114,6 @@ class MainWindow(QMainWindow):
         device_row.addWidget(self.device_combo, stretch=1)
         root.addLayout(device_row)
 
-        # Transcription algorithm row.
-        transcription_row = QHBoxLayout()
-        transcription_row.addWidget(QLabel("Transcription:", central))
-        self.transcription_combo = QComboBox(central)
-        self.transcription_combo.addItem("v2 — improved hats", userData="v2")
-        self.transcription_combo.addItem("v1 — classic", userData="v1")
-        self.transcription_combo.setToolTip(
-            "v2 reroutes open-hat bleed from crashes and distinguishes open vs "
-            "closed hi-hats. v1 is the original closed-hat + crash behavior."
-        )
-        self.transcription_combo.currentIndexChanged.connect(self._on_transcription_changed)
-        transcription_row.addWidget(self.transcription_combo, stretch=1)
-        root.addLayout(transcription_row)
-
         self.warning_label = QLabel("", central)
         self.warning_label.setWordWrap(True)
         self.warning_label.setStyleSheet("color: #b8860b;")
@@ -202,7 +188,7 @@ class MainWindow(QMainWindow):
         self.sensitivity_slider.setEnabled(False)
         self.sensitivity_slider.setToolTip(
             "Onset sensitivity: left detects only the strongest hits, right detects "
-            "more (quieter) hits. Re-runs detection on release."
+            "more (quieter) hits and eases the bleed gate. Re-runs detection on release."
         )
         self.sensitivity_slider.sliderReleased.connect(self._on_sensitivity_changed)
         sens_row.addWidget(self.sensitivity_slider, stretch=1)
@@ -242,7 +228,6 @@ class MainWindow(QMainWindow):
             self._on_plugin_changed(self.plugin_combo.currentIndex())
         if self.device_combo.count():
             self._on_device_changed(self.device_combo.currentIndex())
-        self._on_transcription_changed(self.transcription_combo.currentIndex())
 
     @staticmethod
     def _plugin_label(profile: dict) -> str:
@@ -292,17 +277,6 @@ class MainWindow(QMainWindow):
         device = self.device_combo.itemData(index)
         if device:
             self.controller.set_device(device)
-
-    def _on_transcription_changed(self, index: int) -> None:
-        version = self.transcription_combo.itemData(index)
-        if not version:
-            return
-        prev = self.controller.transcription_version
-        self.controller.set_transcription_version(version)
-        if self.controller.state is not None and version != prev and not self.controller.is_busy():
-            self.status_label.setText(f"Re-transcribing ({version})...")
-            self._set_busy(True, keep_save=True)
-            self.controller.retranscribe()
 
     def _on_convert(self) -> None:
         if not self._wav_path:
@@ -500,7 +474,6 @@ class MainWindow(QMainWindow):
         self.browse_btn.setEnabled(not busy)
         self.plugin_combo.setEnabled(not busy)
         self.device_combo.setEnabled(not busy)
-        self.transcription_combo.setEnabled(not busy)
         self.sensitivity_slider.setEnabled(not busy and self.controller.state is not None)
         if not keep_save:
             self.save_btn.setEnabled(not busy and self.controller.state is not None)

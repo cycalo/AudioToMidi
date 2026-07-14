@@ -293,7 +293,9 @@ class WaveformView(QWidget):
         events = filter_gm_events_by_voices(self._all_events, self._voice_filter)
         by_voice: Dict[str, List[float]] = {v: [] for v in VOICE_ORDER}
         for time_s, note, _velocity in events:
-            voice = GM_NOTE_TO_VOICE.get(int(note), "cymbals")
+            voice = GM_NOTE_TO_VOICE.get(int(note))
+            if voice is None:
+                continue
             by_voice[voice].append(float(time_s))
 
         top = self._amplitude

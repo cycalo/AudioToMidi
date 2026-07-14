@@ -135,12 +135,6 @@ def test_waveform_view_voice_filter_toggle(qapp: QApplication) -> None:
     assert view.voice_filter() == ALL_VOICES
 
 
-def test_transcription_combo_defaults_to_v2(qapp: QApplication) -> None:
-    window = MainWindow()
-    assert window.transcription_combo.itemData(0) == "v2"
-    assert window.controller.transcription_version == "v2"
-
-
 def test_main_module_importable() -> None:
     """Entry point module imports without error."""
     import app.main  # noqa: F401

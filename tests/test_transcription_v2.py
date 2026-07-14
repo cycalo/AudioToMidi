@@ -112,27 +112,19 @@ def test_merge_v1_unchanged_hat_priority() -> None:
     assert GM_NOTE_HIHAT_CLOSED in notes
 
 
-def test_transcribe_v1_explicit_version(tmp_path: Path) -> None:
+def test_transcribe_primary_ignores_metal_stems(tmp_path: Path) -> None:
     stems_dir = tmp_path / "stems"
     stems_dir.mkdir()
-    for name in ("kick", "snare", "toms", "hihat", "cymbals"):
-        (stems_dir / f"{name}.wav").write_bytes(b"")
-    # Empty wav files will fail librosa - use minimal valid wav via soundfile
     import soundfile as sf
 
     silence = np.zeros(SR // 10, dtype=np.float32)
     for name in ("kick", "snare", "toms", "hihat", "cymbals"):
         sf.write(str(stems_dir / f"{name}.wav"), silence, SR)
-    events_v1, summary_v1 = transcribe_stems(
-        str(stems_dir), transcription_version="v1"
-    )
-    events_v2, summary_v2 = transcribe_stems(
-        str(stems_dir), transcription_version="v2"
-    )
-    assert summary_v1["transcription_version"] == "v1"
-    assert summary_v2["transcription_version"] == "v2"
-    assert isinstance(events_v1, list)
-    assert isinstance(events_v2, list)
+    events, summary = transcribe_stems(str(stems_dir))
+    assert summary["transcription_version"] == "primary"
+    assert summary["voices"] == ["kick", "snare", "toms"]
+    assert set(summary["stems"]) <= {"kick", "snare", "toms"}
+    assert isinstance(events, list)
 
 
 def test_resolve_v2_treats_open_hat_as_hat() -> None:
