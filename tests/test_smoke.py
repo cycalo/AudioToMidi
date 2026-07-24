@@ -30,7 +30,7 @@ def qapp() -> QApplication:
 def test_main_window_constructs(qapp: QApplication) -> None:
     """MainWindow can be instantiated under the offscreen platform."""
     window = MainWindow()
-    assert window.windowTitle() == "Drum Stem to MIDI"
+    assert window.windowTitle() == "HitMap"
 
 
 def test_main_window_has_phase5_widgets(qapp: QApplication) -> None:
@@ -84,7 +84,7 @@ def test_waveform_view_constructs(qapp: QApplication) -> None:
 
 def test_elapsed_timer_resets_on_plugin_change(qapp: QApplication) -> None:
     window = MainWindow()
-    window.elapsed_label.setText("Elapsed: 42.0s")
+    window.elapsed_label.setText("42.0s")
     window._elapsed_timer.start()
     window._on_plugin_changed(0)
     assert window.elapsed_label.text() == ""
@@ -95,10 +95,10 @@ def test_convert_resets_elapsed_and_sensitivity(qapp: QApplication) -> None:
     window = MainWindow()
     window._wav_path = "dummy.wav"
     window.sensitivity_slider.setValue(_SLIDER_MIN)
-    window.elapsed_label.setText("Elapsed: 10.0s")
+    window.elapsed_label.setText("10.0s")
     with patch.object(window.controller, "run_analysis"):
         window._on_convert()
-    assert window.elapsed_label.text() == "Elapsed: 0.0s"
+    assert window.elapsed_label.text() == "0.0s"
     assert window._elapsed_timer.isActive()
     assert window.sensitivity_slider.value() == _SLIDER_DEFAULT
 

@@ -119,8 +119,11 @@ def test_export_midi_applies_selected_plugin(qapp, tmp_path) -> None:
     events = [(0.0, 36, 100), (0.5, 50, 80)]
     with patch.object(controller_mod, "separate"), patch.object(
         controller_mod, "transcribe_stems", return_value=(events, {})
-    ):
+    ), patch.object(controller_mod, "estimate_bpm", return_value=84.0):
         _run_analysis(ctrl, str(tmp_path / "drums.wav"))
+
+    assert ctrl.state is not None
+    assert ctrl.state.detected_bpm == 84.0
 
     custom = {"plugin": "Custom", "confidence": "low", "map": {36: 60, 50: 40}}
     ctrl.set_plugin("custom")
@@ -128,12 +131,34 @@ def test_export_midi_applies_selected_plugin(qapp, tmp_path) -> None:
     done: list[str] = []
     ctrl.exportFinished.connect(lambda p: done.append(p))
     with patch.object(controller_mod, "load_profile", return_value=custom):
-        ctrl.export_midi(str(out))
+        ctrl.export_midi(str(out), tempo=84.0)
 
     assert done and out.is_file()
     pm = pretty_midi.PrettyMIDI(str(out))
     pitches = sorted(n.pitch for inst in pm.instruments for n in inst.notes)
     assert pitches == [40, 60]
+    assert pm.get_tempo_changes()[1][0] == pytest.approx(84.0, abs=0.1)
+    ctrl.cleanup()
+
+
+def test_sensitivity_preserves_detected_bpm(qapp, tmp_path) -> None:
+    ctrl = PipelineController()
+    events = [(0.0, 36, 100)]
+    with patch.object(controller_mod, "separate"), patch.object(
+        controller_mod, "transcribe_stems", return_value=(events, {})
+    ), patch.object(controller_mod, "estimate_bpm", return_value=96.0):
+        _run_analysis(ctrl, str(tmp_path / "drums.wav"))
+
+    updated: list[list] = []
+    ctrl.eventsUpdated.connect(lambda e: updated.append(e))
+    with patch.object(
+        controller_mod, "transcribe_stems", return_value=([(0.0, 36, 90)], {})
+    ):
+        ctrl.set_delta_scale(0.5)
+        _wait_until(lambda: bool(updated) and not ctrl.is_busy())
+
+    assert ctrl.state is not None
+    assert ctrl.state.detected_bpm == 96.0
     ctrl.cleanup()
 
 

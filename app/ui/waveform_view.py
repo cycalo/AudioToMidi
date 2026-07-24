@@ -22,12 +22,21 @@ import librosa
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QStackedLayout, QVBoxLayout, QWidget
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from app.ui.theme import (  # noqa: E402
+    COLOR_BORDER,
+    COLOR_PLAYHEAD,
+    COLOR_STAGE,
+    COLOR_SURFACE_RAISED,
+    COLOR_TEXT,
+    COLOR_TEXT_MUTED,
+    COLOR_WAVEFORM,
+)
 from pipeline.drum_voices import (  # noqa: E402
     ALL_VOICES,
     GM_NOTE_TO_VOICE,
@@ -78,13 +87,15 @@ class _VoiceLegendButton(QPushButton):
         r, g, b = self._color
         if self._active:
             self.setStyleSheet(
-                f"QPushButton {{ background-color: rgb({r}, {g}, {b}); color: #111;"
-                f" border: 2px solid #fff; padding: 2px 8px; font-weight: bold; }}"
+                f"QPushButton {{ background-color: rgb({r}, {g}, {b}); color: #0f1218;"
+                f" border: 1px solid rgba(255,255,255,0.35); border-radius: 6px;"
+                f" padding: 3px 10px; font-weight: 600; }}"
             )
         else:
             self.setStyleSheet(
-                f"QPushButton {{ background-color: rgb({r}, {g}, {b}); color: #333;"
-                f" border: 1px solid #666; padding: 2px 8px; opacity: 0.45; }}"
+                f"QPushButton {{ background-color: rgba({r}, {g}, {b}, 0.25); color: #94a3b8;"
+                f" border: 1px solid {COLOR_BORDER}; border-radius: 6px;"
+                f" padding: 3px 10px; }}"
             )
 
 
@@ -100,6 +111,7 @@ class WaveformView(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
 
         self._voice_buttons: Dict[str, _VoiceLegendButton] = {}
         self._all_btn: Optional[QPushButton] = None
@@ -110,19 +122,44 @@ class WaveformView(QWidget):
         self._build_voice_legend(toolbar)
         toolbar.addStretch(1)
         self.reset_btn = QPushButton("Reset View")
+        self.reset_btn.setObjectName("ghostButton")
         self.reset_btn.setEnabled(False)
         self.reset_btn.setToolTip("Fit the full waveform in view (double-click the plot too).")
         self.reset_btn.clicked.connect(self.reset_view)
         toolbar.addWidget(self.reset_btn)
         layout.addLayout(toolbar)
 
+        stage_host = QWidget(self)
+        self._stage_stack = QStackedLayout(stage_host)
+        self._stage_stack.setContentsMargins(0, 0, 0, 0)
+
+        empty = QWidget(stage_host)
+        empty_layout = QVBoxLayout(empty)
+        empty_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title = QLabel("Load a drum stem to begin", empty)
+        title.setObjectName("emptyHintTitle")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sub = QLabel("Kick · snare · toms → plugin MIDI", empty)
+        sub.setObjectName("emptyHintSub")
+        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_layout.addWidget(title)
+        empty_layout.addWidget(sub)
+        self._stage_stack.addWidget(empty)
+
         self._plot = pg.PlotWidget()
-        self._plot.setBackground(None)
-        self._plot.setLabel("bottom", "Time", units="s")
+        self._plot.setBackground(COLOR_STAGE)
+        self._plot.setLabel("bottom", "Time", units="s", color=COLOR_TEXT_MUTED)
+        self._plot.getAxis("bottom").setPen(pg.mkPen(COLOR_BORDER))
+        self._plot.getAxis("bottom").setTextPen(pg.mkPen(COLOR_TEXT_MUTED))
+        self._plot.getAxis("left").setPen(pg.mkPen(COLOR_BORDER))
+        self._plot.getAxis("left").setTextPen(pg.mkPen(COLOR_TEXT_MUTED))
         self._plot.setMenuEnabled(False)
         self._plot.hideButtons()
-        self._plot.showGrid(x=True, y=False, alpha=0.2)
-        layout.addWidget(self._plot)
+        self._plot.showGrid(x=True, y=False, alpha=0.15)
+        self._stage_stack.addWidget(self._plot)
+        self._stage_stack.setCurrentIndex(0)
+
+        layout.addWidget(stage_host, stretch=1)
 
         self._plot.scene().sigMouseClicked.connect(self._on_plot_clicked)
 
@@ -159,8 +196,9 @@ class WaveformView(QWidget):
         self._duration = float(times[-1]) if times.size else 1.0
 
         self._wave_item = self._plot.plot(
-            times, y_ds, pen=pg.mkPen((150, 150, 150), width=1)
+            times, y_ds, pen=pg.mkPen(COLOR_WAVEFORM, width=1.5)
         )
+        self._stage_stack.setCurrentWidget(self._plot)
         self._apply_view_limits()
         self.reset_view()
         self.reset_btn.setEnabled(True)
@@ -180,7 +218,7 @@ class WaveformView(QWidget):
             self._playhead = pg.InfiniteLine(
                 pos=0.0,
                 angle=90,
-                pen=pg.mkPen((255, 255, 255), width=2),
+                pen=pg.mkPen(COLOR_PLAYHEAD, width=2),
             )
             self._plot.addItem(self._playhead)
         self._playhead.setPos(float(time_s))
@@ -213,6 +251,7 @@ class WaveformView(QWidget):
             minXRange=None, maxXRange=None, minYRange=None, maxYRange=None,
         )
         self.reset_btn.setEnabled(False)
+        self._stage_stack.setCurrentIndex(0)
 
     def _apply_view_limits(self) -> None:
         """Clamp pan/zoom so the view cannot drift into empty space."""
@@ -247,7 +286,8 @@ class WaveformView(QWidget):
             swatch.setFixedSize(14, 14)
             swatch.setToolTip(voice)
             swatch.setStyleSheet(
-                f"background-color: rgb({r}, {g}, {b}); border: 1px solid #888;"
+                f"background-color: rgb({r}, {g}, {b}); border: 1px solid {COLOR_BORDER};"
+                f" border-radius: 3px;"
             )
             layout.addWidget(swatch)
             btn = _VoiceLegendButton(voice)
@@ -281,11 +321,14 @@ class WaveformView(QWidget):
         if self._all_btn is not None:
             if all_active:
                 self._all_btn.setStyleSheet(
-                    "QPushButton { font-weight: bold; border: 2px solid #fff; padding: 2px 8px; }"
+                    f"QPushButton {{ font-weight: 700; color: {COLOR_TEXT};"
+                    f" background: {COLOR_SURFACE_RAISED}; border: 1px solid {COLOR_WAVEFORM};"
+                    f" border-radius: 6px; padding: 3px 10px; }}"
                 )
             else:
                 self._all_btn.setStyleSheet(
-                    "QPushButton { padding: 2px 8px; border: 1px solid #666; }"
+                    f"QPushButton {{ color: {COLOR_TEXT_MUTED}; background: transparent;"
+                    f" border: 1px solid {COLOR_BORDER}; border-radius: 6px; padding: 3px 10px; }}"
                 )
 
     def _redraw_markers(self) -> None:

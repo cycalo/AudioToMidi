@@ -36,6 +36,7 @@ from pipeline.preview import (  # noqa: E402
 )
 from pipeline.remap import load_profile, remap_events  # noqa: E402
 from pipeline.separation import separate  # noqa: E402
+from pipeline.tempo import estimate_bpm, normalize_bpm  # noqa: E402
 
 PreviewCacheKey = Tuple[str, FrozenSet[str]]
 
@@ -58,6 +59,7 @@ class AnalysisState:
     summary: dict = field(default_factory=dict)
     delta_scale: float = 1.0
     transcription_version: str = "primary"
+    detected_bpm: float = 120.0
 
 
 class _Worker(QObject):
@@ -218,6 +220,8 @@ class PipelineController(QObject):
                 stems_dir,
                 transcription_version=self._transcription_version,
             )
+            report("Estimating tempo...", 95)
+            bpm = estimate_bpm(wav_path)
             report("Ready for review", 100)
             return AnalysisState(
                 wav_path=wav_path,
@@ -226,6 +230,7 @@ class PipelineController(QObject):
                 summary=summary,
                 delta_scale=1.0,
                 transcription_version=self._transcription_version,
+                detected_bpm=bpm,
             )
 
         self._start_worker(job, "analysis")
@@ -238,6 +243,7 @@ class PipelineController(QObject):
         stems_dir = self._state.stems_dir
 
         wav_path = self._state.wav_path
+        detected_bpm = self._state.detected_bpm
 
         def job(report: Callable[[str, int], None]) -> AnalysisState:
             events, summary = transcribe_stems(
@@ -252,6 +258,7 @@ class PipelineController(QObject):
                 summary=summary,
                 delta_scale=scale,
                 transcription_version=self._transcription_version,
+                detected_bpm=detected_bpm,
             )
 
         self._start_worker(job, "detect")
@@ -265,6 +272,7 @@ class PipelineController(QObject):
         stems_dir = self._state.stems_dir
         wav_path = self._state.wav_path
         version = self._transcription_version
+        detected_bpm = self._state.detected_bpm
 
         def job(_report: Callable[[str, int], None]) -> AnalysisState:
             events, summary = transcribe_stems(
@@ -279,6 +287,7 @@ class PipelineController(QObject):
                 summary=summary,
                 delta_scale=scale,
                 transcription_version=version,
+                detected_bpm=detected_bpm,
             )
 
         self._start_worker(job, "detect")
@@ -288,7 +297,7 @@ class PipelineController(QObject):
         """Remap the current events to the selected plugin and write a ``.mid``.
 
         Fast (in-memory remap + small file write), so it runs on the caller's
-        thread rather than a worker.
+        thread rather than a worker. ``tempo`` must match the DAW project BPM.
         """
         if self._state is None:
             self.exportFailed.emit("Nothing to export yet; run Convert first.")
@@ -296,7 +305,7 @@ class PipelineController(QObject):
         try:
             profile = load_profile(self._plugin_id)
             events = remap_events(self._state.events, profile)
-            write_midi(events, output_path, tempo=tempo)
+            write_midi(events, output_path, tempo=normalize_bpm(tempo))
         except Exception as exc:  # noqa: BLE001 - report any load/write failure
             self.exportFailed.emit(str(exc))
             return

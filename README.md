@@ -1,5 +1,5 @@
 # AudioToMidi — Drum Stem to MIDI Converter
-
+.venv/Scripts/python.exe app/main.py
 AudioToMidi is a Windows desktop application that converts a WAV drum stem into a standard MIDI file, remapped for popular virtual drum plugins. Upload a full-kit drum bus, review detected hits on an interactive waveform, tune sensitivity, and export a `.mid` ready to drag into your DAW.
 
 ## Table of Contents

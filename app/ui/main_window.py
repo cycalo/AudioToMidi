@@ -1,11 +1,4 @@
-"""Main application window.
-
-Phase 5: the full GUI. A file picker loads a drum WAV, a dropdown selects the
-target plugin (annotated by mapping confidence), Convert runs the pipeline in the
-background with a staged progress bar, the waveform view shows detected onsets for
-review, a sensitivity slider re-runs detection live, and Save MIDI exports a
-plugin-remapped ``.mid``.
-"""
+"""HitMap main window — left control rail + waveform stage."""
 
 from __future__ import annotations
 
@@ -14,15 +7,20 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import QElapsedTimer, Qt, QTimer
+from PySide6.QtGui import QShowEvent
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMainWindow,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSlider,
     QVBoxLayout,
     QWidget,
@@ -33,18 +31,21 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from app.controller import PipelineController  # noqa: E402
+from app.ui.theme import app_stylesheet  # noqa: E402
 from app.ui.waveform_view import WaveformView  # noqa: E402
 from pipeline.remap import available_profiles, load_profile  # noqa: E402
 from pipeline.drum_voices import ALL_VOICES  # noqa: E402
 from pipeline.separation import device_options  # noqa: E402
 
-# Slider endpoints map to onset-sensitivity delta scales (see onset_detection).
 _SLIDER_MIN = 0
 _SLIDER_MAX = 100
 _SLIDER_DEFAULT = 50
-_SCALE_FEWER = 2.0  # slider far left: only the strongest hits
+_SCALE_FEWER = 2.0
 _SCALE_DEFAULT = 1.0
-_SCALE_MORE = 0.25  # slider far right: many hits
+_SCALE_MORE = 0.25
+_RAIL_WIDTH = 280
+_STAGE_MIN_WIDTH = 520
+_WINDOW_CHROME_PAD_H = 48
 
 
 def _slider_to_scale(value: int) -> float:
@@ -56,16 +57,25 @@ def _slider_to_scale(value: int) -> float:
     return _SCALE_DEFAULT + frac * (_SCALE_MORE - _SCALE_DEFAULT)
 
 
+def _section_label(text: str, parent: QWidget) -> QLabel:
+    label = QLabel(text, parent)
+    label.setObjectName("sectionLabel")
+    return label
+
+
 class MainWindow(QMainWindow):
-    """Primary window for the Drum Stem to MIDI application."""
+    """HitMap primary window: rail controls + waveform stage."""
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Drum Stem to MIDI")
-        self.resize(900, 640)
+        self.setWindowTitle("HitMap")
+        self.setStyleSheet(app_stylesheet())
 
         self.controller = PipelineController(self)
         self._wav_path: Optional[str] = None
+        self._rail_body: Optional[QWidget] = None
+        self._rail_scroll: Optional[QScrollArea] = None
+        self._initial_fit_done = False
         self._elapsed = QElapsedTimer()
         self._elapsed_timer = QTimer(self)
         self._elapsed_timer.setInterval(500)
@@ -74,115 +84,158 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._connect_controller()
         self._populate_plugins()
+        self._set_session_meta("Load a drum stem to begin")
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        if not self._initial_fit_done:
+            self._initial_fit_done = True
+            QTimer.singleShot(0, self._fit_window_to_content)
+
+    def _fit_window_to_content(self) -> None:
+        """Resize on first show so the rail fits without scrolling."""
+        if self._rail_body is None:
+            return
+        self._rail_body.adjustSize()
+        layout = self.centralWidget().layout()
+        margins = layout.contentsMargins() if layout is not None else None
+        margin_h = (margins.top() + margins.bottom()) if margins is not None else 24
+        margin_w = (margins.left() + margins.right()) if margins is not None else 24
+        spacing = layout.spacing() if layout is not None else 12
+
+        rail_h = self._rail_body.sizeHint().height()
+        win_h = rail_h + margin_h + _WINDOW_CHROME_PAD_H
+        win_w = _RAIL_WIDTH + _STAGE_MIN_WIDTH + margin_w + spacing
+
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            win_w = min(win_w, avail.width())
+            win_h = min(win_h, avail.height())
+
+        self.setMinimumSize(min(win_w, 900), min(win_h, 560))
+        self.resize(win_w, win_h)
+
+        if self._rail_scroll is not None:
+            self._rail_scroll.setVerticalScrollBarPolicy(
+                Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+            )
 
     # -- UI construction ---------------------------------------------------
     def _build_ui(self) -> None:
         central = QWidget(self)
-        root = QVBoxLayout(central)
+        root = QHBoxLayout(central)
+        root.setContentsMargins(0, 0, 12, 12)
+        root.setSpacing(12)
 
-        # Input row: read-only path + browse.
-        input_row = QHBoxLayout()
-        input_row.addWidget(QLabel("WAV:", central))
-        self.path_edit = QLineEdit(central)
+        rail = self._build_rail(central)
+        root.addWidget(rail)
+
+        stage = self._build_stage(central)
+        root.addWidget(stage, stretch=1)
+
+        self.setCentralWidget(central)
+
+    def _build_rail(self, parent: QWidget) -> QWidget:
+        rail_frame = QFrame(parent)
+        rail_frame.setObjectName("railPanel")
+        rail_frame.setFixedWidth(_RAIL_WIDTH)
+
+        outer = QVBoxLayout(rail_frame)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        scroll = QScrollArea(rail_frame)
+        self._rail_scroll = scroll
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+
+        body = QWidget(scroll)
+        self._rail_body = body
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(16, 18, 16, 16)
+        layout.setSpacing(8)
+
+        brand = QLabel("HitMap", body)
+        brand.setObjectName("brandTitle")
+        layout.addWidget(brand)
+
+        tagline = QLabel("Drum stem → MIDI", body)
+        tagline.setObjectName("brandTagline")
+        layout.addWidget(tagline)
+
+        self.session_meta = QLabel("", body)
+        self.session_meta.setObjectName("sessionMeta")
+        self.session_meta.setWordWrap(True)
+        layout.addWidget(self.session_meta)
+
+        layout.addWidget(_section_label("Source", body))
+
+        self.path_edit = QLineEdit(body)
         self.path_edit.setReadOnly(True)
-        self.path_edit.setPlaceholderText("Select a drum stem WAV...")
-        input_row.addWidget(self.path_edit, stretch=1)
-        self.browse_btn = QPushButton("Browse...", central)
+        self.path_edit.setPlaceholderText("Drop WAV or Browse…")
+        layout.addWidget(self.path_edit)
+
+        self.browse_btn = QPushButton("Browse…", body)
+        self.browse_btn.setObjectName("ghostButton")
         self.browse_btn.clicked.connect(self._on_browse)
-        input_row.addWidget(self.browse_btn)
-        root.addLayout(input_row)
+        layout.addWidget(self.browse_btn)
 
-        # Plugin row.
-        plugin_row = QHBoxLayout()
-        plugin_row.addWidget(QLabel("Plugin:", central))
-        self.plugin_combo = QComboBox(central)
+        self.plugin_combo = QComboBox(body)
         self.plugin_combo.currentIndexChanged.connect(self._on_plugin_changed)
-        plugin_row.addWidget(self.plugin_combo, stretch=1)
-        root.addLayout(plugin_row)
+        layout.addWidget(self.plugin_combo)
 
-        # Compute device row (Demucs separation).
-        device_row = QHBoxLayout()
-        device_row.addWidget(QLabel("Device:", central))
-        self.device_combo = QComboBox(central)
+        layout.addWidget(_section_label("Device", body))
+        self.device_combo = QComboBox(body)
         self.device_combo.setToolTip(
-            "Compute device for stem separation. GPU (CUDA) is only listed when "
-            "PyTorch detects a compatible NVIDIA GPU."
+            "Compute device for stem separation. Auto uses the GPU when CUDA is "
+            "available, otherwise CPU."
         )
         for value, label in device_options():
             self.device_combo.addItem(label, userData=value)
+        # device_options() lists auto first — keep that as the default.
+        self.device_combo.setCurrentIndex(0)
         self.device_combo.currentIndexChanged.connect(self._on_device_changed)
-        device_row.addWidget(self.device_combo, stretch=1)
-        root.addLayout(device_row)
+        layout.addWidget(self.device_combo)
 
-        self.warning_label = QLabel("", central)
+        self.warning_label = QLabel("", body)
+        self.warning_label.setObjectName("warningLabel")
         self.warning_label.setWordWrap(True)
-        self.warning_label.setStyleSheet("color: #b8860b;")
         self.warning_label.setVisible(False)
-        root.addWidget(self.warning_label)
+        layout.addWidget(self.warning_label)
 
-        # Action row.
-        action_row = QHBoxLayout()
-        self.convert_btn = QPushButton("Convert", central)
+        self.convert_btn = QPushButton("Convert", body)
+        self.convert_btn.setObjectName("primaryButton")
         self.convert_btn.setEnabled(False)
         self.convert_btn.clicked.connect(self._on_convert)
-        action_row.addWidget(self.convert_btn)
-        self.save_btn = QPushButton("Save MIDI...", central)
-        self.save_btn.setEnabled(False)
-        self.save_btn.clicked.connect(self._on_save)
-        action_row.addWidget(self.save_btn)
-        self.play_btn = QPushButton("Play", central)
-        self.play_btn.setEnabled(False)
-        self.play_btn.setToolTip(
-            "Preview remapped MIDI through the GGD Preview Kit samples."
-        )
-        self.play_btn.clicked.connect(self._on_play)
-        action_row.addWidget(self.play_btn)
-        self.stop_btn = QPushButton("Stop", central)
-        self.stop_btn.setEnabled(False)
-        self.stop_btn.clicked.connect(self._on_stop_preview)
-        action_row.addWidget(self.stop_btn)
-        action_row.addWidget(QLabel("Source:", central))
-        self.source_combo = QComboBox(central)
-        self.source_combo.addItem("MIDI", userData="midi")
-        self.source_combo.addItem("Original", userData="original")
-        self.source_combo.addItem("Both", userData="both")
-        self.source_combo.setEnabled(False)
-        self.source_combo.currentIndexChanged.connect(self._on_source_changed)
-        action_row.addWidget(self.source_combo)
-        self.reset_position_btn = QPushButton("Reset Position", central)
-        self.reset_position_btn.setEnabled(False)
-        self.reset_position_btn.setToolTip("Move the preview playhead back to the start.")
-        self.reset_position_btn.clicked.connect(self._on_reset_position)
-        action_row.addWidget(self.reset_position_btn)
-        self.clear_btn = QPushButton("Clear All", central)
-        self.clear_btn.setToolTip("Stop playback and clear the loaded WAV and analysis.")
-        self.clear_btn.clicked.connect(self._on_clear_all)
-        action_row.addWidget(self.clear_btn)
-        action_row.addStretch(1)
-        root.addLayout(action_row)
+        layout.addWidget(self.convert_btn)
 
-        # Progress row.
         progress_row = QHBoxLayout()
-        self.progress_bar = QProgressBar(central)
+        self.progress_bar = QProgressBar(body)
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(False)
+        self.progress_bar.setTextVisible(False)
         progress_row.addWidget(self.progress_bar, stretch=1)
-        self.elapsed_label = QLabel("", central)
+        self.elapsed_label = QLabel("", body)
+        self.elapsed_label.setObjectName("statusLabel")
         progress_row.addWidget(self.elapsed_label)
-        root.addLayout(progress_row)
+        layout.addLayout(progress_row)
 
-        self.status_label = QLabel("Load a WAV and pick a plugin to begin.", central)
-        root.addWidget(self.status_label)
+        layout.addWidget(_section_label("Review", body))
 
-        # Waveform review (stretches).
-        self.waveform = WaveformView(central)
-        root.addWidget(self.waveform, stretch=1)
+        sens_header = QHBoxLayout()
+        fewer = QLabel("Fewer", body)
+        fewer.setObjectName("statusLabel")
+        more = QLabel("More", body)
+        more.setObjectName("statusLabel")
+        sens_header.addWidget(fewer)
+        sens_header.addStretch(1)
+        sens_header.addWidget(more)
+        layout.addLayout(sens_header)
 
-        # Sensitivity tuning row.
-        sens_row = QHBoxLayout()
-        sens_row.addWidget(QLabel("Fewer", central))
-        self.sensitivity_slider = QSlider(Qt.Orientation.Horizontal, central)
+        self.sensitivity_slider = QSlider(Qt.Orientation.Horizontal, body)
         self.sensitivity_slider.setRange(_SLIDER_MIN, _SLIDER_MAX)
         self.sensitivity_slider.setValue(_SLIDER_DEFAULT)
         self.sensitivity_slider.setEnabled(False)
@@ -191,11 +244,98 @@ class MainWindow(QMainWindow):
             "more (quieter) hits and eases the bleed gate. Re-runs detection on release."
         )
         self.sensitivity_slider.sliderReleased.connect(self._on_sensitivity_changed)
-        sens_row.addWidget(self.sensitivity_slider, stretch=1)
-        sens_row.addWidget(QLabel("More", central))
-        root.addLayout(sens_row)
+        layout.addWidget(self.sensitivity_slider)
 
-        self.setCentralWidget(central)
+        bpm_row = QHBoxLayout()
+        bpm_label = QLabel("BPM", body)
+        bpm_label.setObjectName("statusLabel")
+        bpm_row.addWidget(bpm_label)
+        self.bpm_spin = QDoubleSpinBox(body)
+        self.bpm_spin.setRange(40.0, 240.0)
+        self.bpm_spin.setDecimals(1)
+        self.bpm_spin.setSingleStep(0.1)
+        self.bpm_spin.setValue(120.0)
+        self.bpm_spin.setEnabled(False)
+        self.bpm_spin.setToolTip(
+            "Tempo stamped into the MIDI file. Must match your DAW project BPM so "
+            "playback speed matches the drum track. Auto-detected from the audio; "
+            "edit if the estimate is wrong."
+        )
+        bpm_row.addWidget(self.bpm_spin, stretch=1)
+        layout.addLayout(bpm_row)
+
+        layout.addWidget(_section_label("Preview", body))
+        preview_hint = QLabel("Source ▾", body)
+        preview_hint.setObjectName("comboHintLabel")
+        preview_hint.setToolTip("Choose what to hear during preview")
+        layout.addWidget(preview_hint)
+
+        self.source_combo = QComboBox(body)
+        self.source_combo.setObjectName("previewCombo")
+        self.source_combo.addItem("MIDI", userData="midi")
+        self.source_combo.addItem("Original", userData="original")
+        self.source_combo.addItem("Both", userData="both")
+        self.source_combo.setEnabled(False)
+        self.source_combo.setToolTip(
+            "Choose what to hear during preview: remapped MIDI, original audio, or both."
+        )
+        self.source_combo.currentIndexChanged.connect(self._on_source_changed)
+        layout.addWidget(self.source_combo)
+
+        preview_row = QHBoxLayout()
+        self.play_btn = QPushButton("Play", body)
+        self.play_btn.setObjectName("transportButton")
+        self.play_btn.setEnabled(False)
+        self.play_btn.setToolTip(
+            "Preview remapped MIDI through the GGD Preview Kit samples."
+        )
+        self.play_btn.clicked.connect(self._on_play)
+        preview_row.addWidget(self.play_btn)
+        self.stop_btn = QPushButton("Stop", body)
+        self.stop_btn.setObjectName("transportButton")
+        self.stop_btn.setEnabled(False)
+        self.stop_btn.clicked.connect(self._on_stop_preview)
+        preview_row.addWidget(self.stop_btn)
+        layout.addLayout(preview_row)
+
+        self.reset_position_btn = QPushButton("Reset Position", body)
+        self.reset_position_btn.setEnabled(False)
+        self.reset_position_btn.setToolTip("Move the preview playhead back to the start.")
+        self.reset_position_btn.clicked.connect(self._on_reset_position)
+        layout.addWidget(self.reset_position_btn)
+
+        self.save_btn = QPushButton("Save MIDI", body)
+        self.save_btn.setObjectName("secondaryButton")
+        self.save_btn.setEnabled(False)
+        self.save_btn.clicked.connect(self._on_save)
+        layout.addWidget(self.save_btn)
+
+        self.clear_btn = QPushButton("Clear All", body)
+        self.clear_btn.setToolTip("Stop playback and clear the loaded WAV and analysis.")
+        self.clear_btn.clicked.connect(self._on_clear_all)
+        layout.addWidget(self.clear_btn)
+
+        self.status_label = QLabel("Load a WAV and pick a plugin to begin.", body)
+        self.status_label.setObjectName("statusLabel")
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
+
+        scroll.setWidget(body)
+        outer.addWidget(scroll)
+        return rail_frame
+
+    def _build_stage(self, parent: QWidget) -> QWidget:
+        stage = QFrame(parent)
+        stage.setObjectName("stagePanel")
+        layout = QVBoxLayout(stage)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(0)
+        self.waveform = WaveformView(stage)
+        layout.addWidget(self.waveform, stretch=1)
+        return stage
+
+    def _set_session_meta(self, text: str) -> None:
+        self.session_meta.setText(text)
 
     def _connect_controller(self) -> None:
         self.controller.progress.connect(self._on_progress)
@@ -248,9 +388,11 @@ class MainWindow(QMainWindow):
         if not path:
             return
         self._wav_path = path
-        self.path_edit.setText(path)
+        self.path_edit.setText(Path(path).name)
+        self.path_edit.setToolTip(path)
         self.convert_btn.setEnabled(True)
         self.status_label.setText("Ready to convert.")
+        self._set_session_meta(Path(path).name)
 
     def _on_plugin_changed(self, index: int) -> None:
         stem = self.plugin_combo.itemData(index)
@@ -297,7 +439,7 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
-        self.controller.export_midi(path)
+        self.controller.export_midi(path, tempo=float(self.bpm_spin.value()))
 
     def _on_sensitivity_changed(self) -> None:
         if self.controller.state is None:
@@ -351,11 +493,19 @@ class MainWindow(QMainWindow):
         self._set_busy(False)
         self.save_btn.setEnabled(True)
         self.sensitivity_slider.setEnabled(True)
+        self.bpm_spin.blockSignals(True)
+        self.bpm_spin.setValue(float(getattr(state, "detected_bpm", 120.0)))
+        self.bpm_spin.blockSignals(False)
+        self.bpm_spin.setEnabled(True)
         self.waveform.set_waveform(state.wav_path)
         self.waveform.set_events(state.events)
         self._update_preview_controls()
+        bpm = float(self.bpm_spin.value())
+        n = len(state.events)
+        self._set_session_meta(f"{n} hits · ~{bpm:0.1f} BPM")
         self.status_label.setText(
-            f"Detected {len(state.events)} events. Review, tune sensitivity, then Play or Save MIDI."
+            f"Detected {n} events · BPM ~{bpm:0.1f} (editable). "
+            "Review, then Play or Save MIDI."
         )
 
     def _on_analysis_failed(self, error: str) -> None:
@@ -370,6 +520,8 @@ class MainWindow(QMainWindow):
         self.save_btn.setEnabled(True)
         self.waveform.set_events(events)
         self._update_preview_controls()
+        bpm = float(self.bpm_spin.value())
+        self._set_session_meta(f"{len(events)} hits · ~{bpm:0.1f} BPM")
         self.status_label.setText(f"Detected {len(events)} events after tuning.")
 
     def _on_export_finished(self, path: str) -> None:
@@ -402,6 +554,7 @@ class MainWindow(QMainWindow):
     def _on_session_reset(self) -> None:
         self._wav_path = None
         self.path_edit.clear()
+        self.path_edit.setToolTip("")
         self.progress_bar.setVisible(False)
         self.progress_bar.setValue(0)
         self._elapsed_timer.stop()
@@ -414,27 +567,30 @@ class MainWindow(QMainWindow):
         self.convert_btn.setEnabled(False)
         self.save_btn.setEnabled(False)
         self.sensitivity_slider.setEnabled(False)
+        self.bpm_spin.blockSignals(True)
+        self.bpm_spin.setValue(120.0)
+        self.bpm_spin.blockSignals(False)
+        self.bpm_spin.setEnabled(False)
         self._update_preview_controls()
+        self._set_session_meta("Load a drum stem to begin")
         self.status_label.setText("Load a WAV and pick a plugin to begin.")
 
     # -- helpers -----------------------------------------------------------
     def _reset_elapsed_display(self, *, running: bool = False) -> None:
-        """Clear the elapsed-time readout; optionally start a fresh timer."""
         self._elapsed_timer.stop()
         self._elapsed.restart()
-        self.elapsed_label.setText("Elapsed: 0.0s" if running else "")
+        self.elapsed_label.setText("0.0s" if running else "")
         if running:
             self._elapsed_timer.start()
 
     def _reset_sensitivity_slider(self) -> None:
-        """Return sensitivity to tuned defaults (matches a fresh Convert run)."""
         self.sensitivity_slider.blockSignals(True)
         self.sensitivity_slider.setValue(_SLIDER_DEFAULT)
         self.sensitivity_slider.blockSignals(False)
 
     def _tick_elapsed(self) -> None:
         seconds = self._elapsed.elapsed() / 1000.0
-        self.elapsed_label.setText(f"Elapsed: {seconds:0.1f}s")
+        self.elapsed_label.setText(f"{seconds:0.1f}s")
 
     def _update_preview_controls(self) -> None:
         has_state = self.controller.state is not None
@@ -469,12 +625,16 @@ class MainWindow(QMainWindow):
             (has_state and preview_ok and not busy) or playing
         )
 
-    def _set_busy(self, busy: bool, *, keep_save: bool = False, keep_preview: bool = False) -> None:
+    def _set_busy(
+        self, busy: bool, *, keep_save: bool = False, keep_preview: bool = False
+    ) -> None:
         self.convert_btn.setEnabled(not busy and self._wav_path is not None)
         self.browse_btn.setEnabled(not busy)
         self.plugin_combo.setEnabled(not busy)
         self.device_combo.setEnabled(not busy)
         self.sensitivity_slider.setEnabled(not busy and self.controller.state is not None)
+        self.bpm_spin.setEnabled(not busy and self.controller.state is not None)
+        self.clear_btn.setEnabled(not busy)
         if not keep_save:
             self.save_btn.setEnabled(not busy and self.controller.state is not None)
         if not keep_preview:

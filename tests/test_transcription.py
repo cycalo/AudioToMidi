@@ -90,6 +90,18 @@ def test_write_midi_roundtrip(tmp_path: Path) -> None:
     assert written_starts == pytest.approx([0.5, 1.0, 1.5], abs=1e-3)
 
 
+def test_write_midi_stamps_tempo(tmp_path: Path) -> None:
+    events = [(0.5, 36, 40), (1.0, 36, 80)]
+    out = tmp_path / "tempo84.mid"
+
+    write_midi(events, out, tempo=84.0)
+
+    pm = pretty_midi.PrettyMIDI(str(out))
+    assert pm.get_tempo_changes()[1][0] == pytest.approx(84.0, abs=0.1)
+    written_starts = sorted(note.start for note in pm.instruments[0].notes)
+    assert written_starts == pytest.approx([0.5, 1.0], abs=1e-3)
+
+
 def test_end_to_end_kick_to_midi(tmp_path: Path) -> None:
     wav = tmp_path / "kick.wav"
     times, _ = _synth_kick_wav(wav)

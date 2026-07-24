@@ -35,8 +35,10 @@ def write_midi(
     Args:
         events: Iterable of ``(time_seconds, midi_note, velocity)`` tuples.
         output_path: Destination ``.mid`` path (parent dirs are created).
-        tempo: Initial tempo written to the file. Detected event times are
-            absolute seconds, so tempo only affects the DAW's grid display.
+        tempo: Initial tempo written to the file. Event times are absolute
+            seconds in memory; this BPM controls tick encoding. Many DAWs
+            schedule those ticks at the *project* tempo, so this value must
+            match the track BPM or playback speed will be wrong.
         note_duration: Fixed note length in seconds for each one-shot hit.
         is_drum: Place notes on the GM drum channel when True.
         program: GM program number (ignored by most hosts when ``is_drum``).
