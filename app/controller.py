@@ -20,14 +20,15 @@ import numpy as np
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+_DEV_ROOT = Path(__file__).resolve().parent.parent
+if str(_DEV_ROOT) not in sys.path:
+    sys.path.insert(0, str(_DEV_ROOT))
 
 from app.audio_playback import AudioPlayback  # noqa: E402
 from pipeline.drum_voices import ALL_VOICES, filter_gm_events_by_voices  # noqa: E402
 from pipeline.merge import transcribe_stems  # noqa: E402
 from pipeline.midi_writer import Event, write_midi  # noqa: E402
+from pipeline.paths import repo_root  # noqa: E402
 from pipeline.preview import (  # noqa: E402
     PreviewMode,
     build_preview_buffer,
@@ -39,6 +40,7 @@ from pipeline.separation import separate  # noqa: E402
 from pipeline.tempo import estimate_bpm, normalize_bpm  # noqa: E402
 
 PreviewCacheKey = Tuple[str, FrozenSet[str]]
+REPO_ROOT = repo_root()
 
 
 def _separation_progress_message(device: str) -> str:

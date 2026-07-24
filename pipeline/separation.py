@@ -37,6 +37,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from pipeline.paths import repo_root  # noqa: E402
+
 # --- drumsep checkpoint (inagoy/drumsep, Hybrid Demucs) --------------------
 DRUMSEP_SIGNATURE = "49469ca8"
 DRUMSEP_FILENAME = f"{DRUMSEP_SIGNATURE}.th"
@@ -45,7 +47,16 @@ DRUMSEP_URL = os.environ.get(
     "https://huggingface.co/NeoPy/UVR/resolve/main/drumsep/model.th",
 )
 DRUMSEP_SHA256 = "aefaa8543c9b9c75e22f5f32b53ab86dfe416457849af1383ff1aef83401423f"
-MODELS_DIR = REPO_ROOT / "models" / "drumsep"
+
+
+def _models_dir() -> Path:
+    """Writable checkpoint cache: next to the .exe when frozen, else repo models/."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent / "models" / "drumsep"
+    return repo_root() / "models" / "drumsep"
+
+
+MODELS_DIR = _models_dir()
 
 # The checkpoint's internal source names are Spanish; translate to our English ones.
 _SOURCE_TRANSLATION = {

@@ -22,6 +22,19 @@ from app.ui.main_window import MainWindow  # noqa: E402
 STEM_TEMP_PREFIX = "audiotomidi_"
 
 
+def ensure_stdio() -> None:
+    """Provide writable stdout/stderr for PyInstaller windowed builds.
+
+    With ``console=False`` (``runw.exe``), Windows leaves ``sys.stdout`` and
+    ``sys.stderr`` as ``None``. Demucs/tqdm progress and ``print(..., file=sys.stderr)``
+    then fail with ``'NoneType' object has no attribute 'write'``.
+    """
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8", errors="replace")  # noqa: SIM115
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8", errors="replace")  # noqa: SIM115
+
+
 def cleanup_orphaned_stem_dirs(
     temp_root: Optional[Path] = None,
     *,
@@ -66,6 +79,7 @@ def cleanup_orphaned_stem_dirs(
 
 def main() -> int:
     """Launch the application."""
+    ensure_stdio()
     cleanup_orphaned_stem_dirs()
     app = QApplication(sys.argv)
     window = MainWindow()

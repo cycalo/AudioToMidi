@@ -314,7 +314,7 @@ pyinstaller build.spec
 dist\AudioToMidi\AudioToMidi.exe
 ```
 
-The first run inside the packaged app still downloads the Demucs checkpoint on demand. Phase 6 (full PyInstaller packaging polish) is in progress.
+The first run inside the packaged app still downloads the Demucs checkpoint on demand (cached next to the `.exe` under `models/drumsep/`). Rebuild after pulling so `mappings/` and `Preview Kit/` are bundled — without them the plugin dropdown stays empty and GGD preview stays disabled.
 
 
 | Component   | Platform | Notes                               |

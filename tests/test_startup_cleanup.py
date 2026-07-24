@@ -10,7 +10,27 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from app.main import STEM_TEMP_PREFIX, cleanup_orphaned_stem_dirs  # noqa: E402
+from app.main import STEM_TEMP_PREFIX, cleanup_orphaned_stem_dirs, ensure_stdio  # noqa: E402
+
+
+def test_ensure_stdio_restores_none_streams() -> None:
+    """Windowed PyInstaller builds leave stdout/stderr as None."""
+    real_out, real_err = sys.stdout, sys.stderr
+    try:
+        sys.stdout = None  # type: ignore[assignment]
+        sys.stderr = None  # type: ignore[assignment]
+        ensure_stdio()
+        assert sys.stdout is not None
+        assert sys.stderr is not None
+        sys.stdout.write("ok\n")
+        sys.stderr.write("ok\n")
+    finally:
+        if sys.stdout is not None and sys.stdout is not real_out:
+            sys.stdout.close()
+        if sys.stderr is not None and sys.stderr is not real_err:
+            sys.stderr.close()
+        sys.stdout = real_out
+        sys.stderr = real_err
 
 
 def test_orphaned_audiotomidi_folder_removed_on_cleanup(tmp_path: Path) -> None:

@@ -29,10 +29,11 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from pipeline.midi_writer import Event  # noqa: E402
+from pipeline.paths import repo_root  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-MAPPINGS_DIR = REPO_ROOT / "mappings"
+MAPPINGS_DIR = repo_root() / "mappings"
 REQUIRED_KEYS = ("plugin", "confidence", "map")
 
 

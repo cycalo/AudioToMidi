@@ -10,7 +10,10 @@ a = Analysis(
     [str(repo_root / "app" / "main.py")],
     pathex=[str(repo_root)],
     binaries=[],
-    datas=[],
+    datas=[
+        (str(repo_root / "mappings"), "mappings"),
+        (str(repo_root / "Preview Kit"), "Preview Kit"),
+    ],
     hiddenimports=["PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets"],
     hookspath=[],
     hooksconfig={},

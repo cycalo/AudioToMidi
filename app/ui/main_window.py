@@ -366,6 +366,14 @@ class MainWindow(QMainWindow):
             self.plugin_combo.addItem(label, userData=stem)
         if self.plugin_combo.count():
             self._on_plugin_changed(self.plugin_combo.currentIndex())
+        else:
+            self.status_label.setText(
+                "No plugin mappings found. Rebuild the app so mappings/ is bundled."
+            )
+            self.warning_label.setText(
+                "Plugin profiles missing — remapping and GGD preview unavailable."
+            )
+            self.warning_label.setVisible(True)
         if self.device_combo.count():
             self._on_device_changed(self.device_combo.currentIndex())
 

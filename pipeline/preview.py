@@ -28,6 +28,7 @@ from pipeline.drum_voices import (  # noqa: E402
     is_all_voices,
 )
 from pipeline.midi_writer import Event  # noqa: E402
+from pipeline.paths import repo_root as default_repo_root  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +53,7 @@ class PreviewKit:
 
 def resolve_kit_dir(profile: dict, *, repo_root: Optional[Path] = None) -> Path:
     """Resolve the preview kit directory from a mapping profile."""
-    root = repo_root or REPO_ROOT
+    root = repo_root if repo_root is not None else default_repo_root()
     kit_ref = profile.get("preview_kit")
     if not kit_ref:
         raise ValueError(
