@@ -24,6 +24,9 @@ tests/fixtures/**/*.wav
 tests/fixtures/**/*.mid
 tests/fixtures/*_stems*/
 
+# Brainstorm / agent local artifacts
+.superpowers/
+
 # IDE / OS
 .vscode/
 .idea/
