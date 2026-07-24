@@ -1,6 +1,8 @@
 # AudioToMidi — Drum Stem to MIDI Converter
-.venv/Scripts/python.exe app/main.py
-AudioToMidi is a Windows desktop application that converts a WAV drum stem into a standard MIDI file, remapped for popular virtual drum plugins. Upload a full-kit drum bus, review detected hits on an interactive waveform, tune sensitivity, and export a `.mid` ready to drag into your DAW.
+
+AudioToMidi (GUI branded **HitMap**) is a Windows desktop application that converts a WAV drum stem into a standard MIDI file, remapped for popular virtual drum plugins. Upload a full-kit drum bus, review detected hits on an interactive waveform, tune sensitivity and BPM, preview (GGD), and export a `.mid` ready to drag into your DAW.
+
+For a short console / packaging walkthrough, see [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
 
 ## Table of Contents
 
@@ -20,43 +22,35 @@ AudioToMidi is a Windows desktop application that converts a WAV drum stem into 
 - [Contributing](#contributing)
 - [License](#license)
 
-
-
 ## Features
 
 - **Kick / snare / tom transcription** — Separates a drum stem (Demucs still produces full stems internally), then detects onsets for kick, snare, and toms only, with bleed hardening (relative peak floor + cross-stem dominance).
 - **Tom pitch clustering** — Splits the toms stem into floor tom and rack tom using relative pitch clustering (k=2).
 - **Velocity mapping** — Normalizes hit amplitudes to MIDI velocities with a configurable floor so ghost notes stay audible.
+- **BPM sync on export** — Estimates tempo after Convert, shows an editable BPM control (40–240), and stamps that tempo into the MIDI so it matches your DAW project BPM.
 - **Plugin remapping** — Transcribes to General MIDI first, then applies a thin JSON-driven remap layer for seven target plugins.
-- **Desktop GUI** — PySide6 window with staged progress, waveform review, color-coded onset markers, sensitivity slider, GGD sample-based preview playback before export, and Help → View debug log…
+- **HitMap desktop GUI** — Themed PySide6 layout (left control rail + waveform stage), staged progress, color-coded onset markers, sensitivity slider, device picker, Clear All, GGD sample-based preview before export, and Help → View debug log…
 - **CLI pipeline** — Each processing stage is also available as a standalone script for scripting and debugging.
 - **Dual separation backends** — Demucs drumsep (best quality, GPU-friendly) or a lightweight DSP fallback (no model download).
 - **Session caching** — Separated stems live under `%TEMP%\audiotomidi_*` for the session (cleaned on quit / Clear All / next Convert); orphaned temp dirs from crashed sessions are removed on startup. The drumsep model (~167 MB) is cached under `models/drumsep/` (next to the exe when packaged) and kept between runs.
 
-
-
 ## Tech Stack
 
-
-| Layer             | Technology                       |
-| ----------------- | -------------------------------- |
-| Language          | Python 3.11+ (3.13+ recommended) |
-| GUI               | PySide6, pyqtgraph               |
-| Audio I/O         | librosa, soundfile               |
-| Source separation | demucs-infer, PyTorch            |
-| Onset detection   | librosa                          |
-| MIDI              | pretty_midi                      |
-| Preview playback  | sounddevice                      |
-| Numerics          | NumPy, SciPy                     |
-| Packaging         | PyInstaller                      |
-| Testing           | pytest                           |
-
-
-
+| Layer | Technology |
+| --- | --- |
+| Language | Python 3.11+ (3.13+ recommended) |
+| GUI | PySide6, pyqtgraph |
+| Audio I/O | librosa, soundfile |
+| Source separation | demucs-infer, PyTorch |
+| Onset detection | librosa |
+| Tempo estimation | librosa beat tracking |
+| MIDI | pretty_midi |
+| Preview playback | sounddevice |
+| Numerics | NumPy, SciPy |
+| Packaging | PyInstaller |
+| Testing | pytest |
 
 ## Quick Start
-
-
 
 ### Prerequisites
 
@@ -65,27 +59,42 @@ AudioToMidi is a Windows desktop application that converts a WAV drum stem into 
 - **~2 GB disk space** for Python dependencies and the one-time Demucs checkpoint (~167 MB)
 - **Optional GPU** — CUDA speeds up separation significantly; CPU-only works but is slower
 
-
-
 ### Installation
 
 1. **Clone the repository**
-  ```bash
-   git clone https://github.com/YOUR_USERNAME/AudioToMidi.git
+
+   ```bash
+   git clone https://github.com/cycalo/AudioToMidi.git
    cd AudioToMidi
-  ```
+   ```
+
 2. **Create a virtual environment and install dependencies**
-  ```bash
+
+   ```bash
    python -m venv .venv
-   .venv\Scripts\activate
+   ```
+
+   Activate (pick your shell):
+
+   | Shell | Activate |
+   | --- | --- |
+   | Git Bash / MINGW | `source .venv/Scripts/activate` |
+   | PowerShell | `.\.venv\Scripts\Activate.ps1` |
+   | cmd.exe | `.venv\Scripts\activate.bat` |
+
+   Then:
+
+   ```bash
    pip install -r requirements.txt
-  ```
+   ```
+
 3. **Run tests** (optional but recommended)
-  ```bash
+
+   ```bash
    pytest -q
-  ```
+   ```
 
-
+More detail (including running without activating the venv): [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
 
 ### Run the GUI
 
@@ -93,14 +102,20 @@ AudioToMidi is a Windows desktop application that converts a WAV drum stem into 
 python app/main.py
 ```
 
+Or without activating:
+
+```bash
+.venv/Scripts/python.exe app/main.py
+```
+
 **Workflow:**
 
 1. **Browse** to a drum-stem WAV, pick a target plugin, and choose a **Device** for separation: **Auto** (GPU if available), **CPU**, or **GPU** (shown only when CUDA is detected). Medium/low-confidence plugins show an inline hint (full detail lives in each profile's `notes` field under `mappings/`).
-2. Click **Convert**. Separation and onset detection run on a background thread with a staged progress bar. When finished, the waveform shows color-coded onset markers for **kick / snare / toms**.
+2. Click **Convert**. Separation and onset detection run on a background thread with a staged progress bar. When finished, the waveform shows color-coded onset markers for **kick / snare / toms**, and **BPM** is filled from the estimated tempo (editable, 40–240).
 3. **Sensitivity** (optional) — The slider starts at tuned per-stem defaults. Drag and release to re-run detection on cached stems (left = fewer hits, right = more including quieter hits). Re-runs skip separation and typically finish in under a second.
 4. **Voice filter** (preview) — Click a drum voice label above the waveform (**kick**, **snare**, **toms**) to filter preview playback. The first click isolates that voice; further clicks add voices. Click **All** to reset. Works with MIDI, Original (isolated stems), and Both sources. Onset markers on the waveform follow the same filter.
 5. **Preview** (GetGood Drums only) — Select **GetGood Drums**, choose a **Source** mode (**MIDI** default, **Original**, or **Both**), then click **Play** to hear the remapped transcription through the bundled [Preview Kit](Preview%20Kit/) samples. Use **Both** to compare timing against the original stem. A playhead tracks playback on the waveform.
-6. Click **Save MIDI...** to write the plugin-remapped `.mid`.
+6. Click **Save MIDI...** to write the plugin-remapped `.mid` with the BPM spinbox value stamped as the file tempo. Set BPM to match your DAW project tempo so note timing plays back at the correct speed.
 
 ### GGD Preview Kit mapping
 
@@ -120,27 +135,25 @@ The [Preview Kit](Preview%20Kit/) uses post-remap GGD Modern & Massive GM note n
 
 **Timing expectations:**
 
-
-| Step                                    | Typical duration (~30s clip)       |
-| --------------------------------------- | ---------------------------------- |
+| Step | Typical duration (~30s clip) |
+| --- | --- |
 | First Convert (includes model download) | One-time ~167 MB download (shown in the progress status) + separation; can take a few minutes on a cold machine / slow network, then much faster on GPU |
-| Subsequent Converts                     | ~15–50s on CPU; often ~10s on GPU once the model is cached |
-| Sensitivity re-run                      | < 1s                               |
-| Merge + remap                           | < 2s                               |
-
-
-
+| Subsequent Converts | ~15–50s on CPU; often ~10s on GPU once the model is cached |
+| Sensitivity re-run | < 1s |
+| Merge + remap + tempo stamp | < 2s |
 
 ## Repository Structure
 
 ```
 AudioToMidi/
 ├── app/
-│   ├── main.py                  # PySide6 entry point; startup temp cleanup
+│   ├── main.py                  # HitMap entry point; startup temp cleanup
 │   ├── controller.py            # Wires UI to pipeline stages
+│   ├── audio_playback.py        # Preview audio output helpers
 │   ├── log_buffer.py            # In-memory debug log ring buffer
 │   └── ui/
-│       ├── main_window.py       # Main window, controls, progress
+│       ├── main_window.py       # HitMap: left rail + waveform stage
+│       ├── theme.py             # Colors and global Qt stylesheet
 │       ├── debug_log_dialog.py  # Help → View debug log
 │       └── waveform_view.py     # pyqtgraph onset review widget
 ├── pipeline/
@@ -148,31 +161,28 @@ AudioToMidi/
 │   ├── separation.py            # Demucs drumsep or DSP fallback
 │   ├── onset_detection.py       # Per-stem onset + velocity extraction
 │   ├── merge.py                 # Timeline merge, tom clustering, GM output
-│   ├── transcription_v2.py      # v2 open-hat rerouting + open/closed classification
+│   ├── transcription_v2.py      # Alternate transcription path (experimental)
+│   ├── tempo.py                 # BPM estimate + normalize for MIDI export
 │   ├── remap.py                 # GM → plugin note remap
+│   ├── preview.py               # GGD Preview Kit rendering
+│   ├── drum_voices.py           # Voice labels / filter helpers
+│   ├── paths.py                 # Repo / resource path resolution
 │   └── midi_writer.py           # pretty_midi file writer
 ├── mappings/                    # JSON plugin profiles (one per target)
-│   ├── general_midi.json
-│   ├── superior_drummer_3.json
-│   ├── ezdrummer_3.json
-│   ├── addictive_drums_2.json
-│   ├── bfd3.json
-│   ├── steven_slate_5_5.json
-│   ├── ggd.json
-│   └── drumforge.json
+├── Preview Kit/                 # Sample kit for in-app GGD preview
 ├── models/                      # Downloaded separation checkpoints (gitignored)
 ├── tests/
 │   ├── fixtures/                # Short sample stems for regression tests
 │   └── test_*.py
 ├── docs/
+│   ├── GETTING_STARTED.md       # Console run + PyInstaller walkthrough
 │   ├── PROJECT_SPEC.MD          # Original project specification
-│   └── IMPLEMENTATION_PLAN.md   # Architecture and phase plan
+│   ├── IMPLEMENTATION_PLAN.md   # Architecture and phase plan
+│   └── superpowers/             # Design specs and implementation plans
 ├── requirements.txt
 ├── build.spec                   # PyInstaller one-folder spec
 └── README.md
 ```
-
-
 
 ## Architecture Overview
 
@@ -200,49 +210,44 @@ WAV drum stem
 [5] Cross-stem dominance gate + timeline merge
      │   → (time, GM note, velocity) events
      ▼
-[6] GM → plugin remap (JSON profile)
+[6] Tempo estimate (librosa beat track → editable BPM)
      │
      ▼
-[7] MIDI file writer → .mid
+[7] GM → plugin remap (JSON profile)
+     │
+     ▼
+[8] MIDI file writer → .mid (tempo stamped from BPM control)
 ```
 
 **Emitted GM notes:**
 
-
-| Note | Drum voice                    |
-| ---- | ----------------------------- |
-| 36   | Kick                          |
-| 38   | Snare                         |
-| 45   | Floor tom                     |
-| 47   | Tom fallback (single cluster) |
-| 50   | Rack tom                      |
-
-
-
+| Note | Drum voice |
+| ---- | ---------- |
+| 36 | Kick |
+| 38 | Snare |
+| 45 | Floor tom |
+| 47 | Tom fallback (single cluster) |
+| 50 | Rack tom |
 
 ## Supported Plugins
 
 Profiles live in `mappings/` as JSON files. Confidence reflects mapping documentation quality, not transcription accuracy.
 
-
-| Plugin                 | Confidence | Notes                                                              |
-| ---------------------- | ---------- | ------------------------------------------------------------------ |
-| Superior Drummer 3     | High       | GM pass-through; built-in GM keymap preset                         |
-| EZdrummer 3            | High       | GM pass-through                                                    |
-| Addictive Drums 2      | High       | Load the GM map preset in AD2                                      |
-| BFD3                   | High       | Select General MIDI keymap in BFD3                                 |
-| Steven Slate Drums 5.5 | Medium     | Load Groove Monkee GM IOMap in SSD5.5                              |
-| GetGood Drums          | Medium     | Select **GM** preset in plugin; in-app preview via Preview Kit      |
-| Drumforge              | Low        | Proprietary factory map; toms/cymbals may need manual verification |
-
+| Plugin | Confidence | Notes |
+| --- | --- | --- |
+| Superior Drummer 3 | High | GM pass-through; built-in GM keymap preset |
+| EZdrummer 3 | High | GM pass-through |
+| Addictive Drums 2 | High | Load the GM map preset in AD2 |
+| BFD3 | High | Select General MIDI keymap in BFD3 |
+| Steven Slate Drums 5.5 | Medium | Load Groove Monkee GM IOMap in SSD5.5 |
+| GetGood Drums | Medium | Select **GM** preset in plugin; in-app preview via Preview Kit |
+| Drumforge | Low | Proprietary factory map; tom mapping may need verification |
 
 List all profiles from the CLI:
 
 ```bash
 python pipeline/remap.py --list
 ```
-
-
 
 ## CLI Tools
 
@@ -275,6 +280,7 @@ python pipeline/merge.py drums_stems -o drums.mid
 ```
 
 Options: `--bleed-suppression`, `--velocity-floor`, `--delta-scale` (sensitivity, same knob as the GUI slider), `--relative-peak-floor`, `--dominance-ratio`, `--tempo`, `--plugin NAME`.
+
 ### Remap GM MIDI to a plugin
 
 ```bash
@@ -284,18 +290,14 @@ python pipeline/remap.py drums.mid --plugin superior_drummer_3 -o drums_sd3.mid
 python pipeline/merge.py drums_stems --plugin ezdrummer_3 -o drums.mid
 ```
 
-
-
 ## Environment Variables
 
-
-| Variable                         | Description                                                                 |
-| -------------------------------- | --------------------------------------------------------------------------- |
-| `AUDIOTOMIDI_SEPARATION_BACKEND` | Default separation backend: `demucs` or `dsp`                               |
-| `AUDIOTOMIDI_DRUMSEP_URL`        | Override URL for the Demucs drumsep checkpoint download                     |
-| `AUDIOTOMIDI_RUN_DEMUCS_TESTS`   | Set to `1` to run integration tests that require the cached checkpoint      |
-| `AUDIOTOMIDI_SELFTEST`           | Set to `1` for a headless startup self-test (used in CI-style smoke checks) |
-
+| Variable | Description |
+| --- | --- |
+| `AUDIOTOMIDI_SEPARATION_BACKEND` | Default separation backend: `demucs` or `dsp` |
+| `AUDIOTOMIDI_DRUMSEP_URL` | Override URL for the Demucs drumsep checkpoint download |
+| `AUDIOTOMIDI_RUN_DEMUCS_TESTS` | Set to `1` to run integration tests that require the cached checkpoint |
+| `AUDIOTOMIDI_SELFTEST` | Set to `1` for a headless startup self-test (used in CI-style smoke checks) |
 
 Never commit API keys or secrets. This project does not require external API keys.
 
@@ -305,7 +307,7 @@ Never commit API keys or secrets. This project does not require external API key
 pytest -q
 ```
 
-Tests cover separation, transcription, merge, remap, controller logic, and startup cleanup. Demucs integration tests are skipped unless the drumsep checkpoint is cached locally or `AUDIOTOMIDI_RUN_DEMUCS_TESTS=1` is set.
+Tests cover separation, transcription, merge, remap, tempo, controller logic, main window BPM wiring, preview, debug log buffer, and startup cleanup. Demucs integration tests are skipped unless the drumsep checkpoint is cached locally or `AUDIOTOMIDI_RUN_DEMUCS_TESTS=1` is set.
 
 ## Build & Deployment
 
@@ -313,19 +315,18 @@ Package a one-folder Windows executable with PyInstaller:
 
 ```bash
 pyinstaller build.spec
-dist\AudioToMidi\AudioToMidi.exe
 ```
+
+**Output:** `dist/AudioToMidi/AudioToMidi.exe`
+
+Ship the whole `dist/AudioToMidi/` folder — do not move only the `.exe`.
 
 The first run inside the packaged app still downloads the Demucs checkpoint on demand (cached next to the `.exe` under `models/drumsep/`). Rebuild after pulling so `mappings/` and `Preview Kit/` are bundled — without them the plugin dropdown stays empty and GGD preview stays disabled.
 
-
-| Component   | Platform | Notes                               |
-| ----------- | -------- | ----------------------------------- |
-| Desktop app | Windows  | PyInstaller one-folder build        |
-| macOS       | Planned  | Same Python codebase; packaging TBD |
-
-
-
+| Component | Platform | Notes |
+| --- | --- | --- |
+| Desktop app | Windows | PyInstaller one-folder build |
+| macOS | Planned | Same Python codebase; packaging TBD |
 
 ## Contributing
 
@@ -333,15 +334,19 @@ Contributions are welcome. To get started:
 
 1. **Fork** the repository on GitHub.
 2. **Clone** your fork and create a feature branch:
-  ```bash
+
+   ```bash
    git checkout -b feat/your-feature-name
-  ```
-3. **Set up** the environment (see [Quick Start](#quick-start)).
+   ```
+
+3. **Set up** the environment (see [Quick Start](#quick-start) or [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)).
 4. **Make changes** and add or update tests where behavior changes.
 5. **Run the test suite**:
-  ```bash
+
+   ```bash
    pytest -q
-  ```
+   ```
+
 6. **Commit** with clear messages (`feat:`, `fix:`, `docs:`, `refactor:`).
 7. **Open a pull request** with a short description of what changed and why.
 
