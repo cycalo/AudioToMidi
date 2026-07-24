@@ -35,6 +35,12 @@ def test_normalize_bpm_passes_valid() -> None:
     assert normalize_bpm(84.0) == 84.0
 
 
+def test_normalize_bpm_rounds_to_whole_number() -> None:
+    assert normalize_bpm(84.4) == 84.0
+    assert normalize_bpm(84.6) == 85.0
+    assert normalize_bpm(119.5) == 120.0
+
+
 def _write_click_track(path: Path, bpm: float, bars: int = 8) -> None:
     """Write a simple click WAV at a constant BPM (one click per quarter note)."""
     beat_period = 60.0 / bpm

@@ -28,10 +28,10 @@ AudioToMidi is a Windows desktop application that converts a WAV drum stem into 
 - **Tom pitch clustering** — Splits the toms stem into floor tom and rack tom using relative pitch clustering (k=2).
 - **Velocity mapping** — Normalizes hit amplitudes to MIDI velocities with a configurable floor so ghost notes stay audible.
 - **Plugin remapping** — Transcribes to General MIDI first, then applies a thin JSON-driven remap layer for seven target plugins.
-- **Desktop GUI** — PySide6 window with staged progress, waveform review, color-coded onset markers, sensitivity slider, and GGD sample-based preview playback before export.
+- **Desktop GUI** — PySide6 window with staged progress, waveform review, color-coded onset markers, sensitivity slider, GGD sample-based preview playback before export, and Help → View debug log…
 - **CLI pipeline** — Each processing stage is also available as a standalone script for scripting and debugging.
 - **Dual separation backends** — Demucs drumsep (best quality, GPU-friendly) or a lightweight DSP fallback (no model download).
-- **Session caching** — Separated stems are cached under `%TEMP%\audiotomidi_`* so sensitivity tweaks are fast; orphaned temp dirs from crashed sessions are cleaned on startup.
+- **Session caching** — Separated stems live under `%TEMP%\audiotomidi_*` for the session (cleaned on quit / Clear All / next Convert); orphaned temp dirs from crashed sessions are removed on startup. The drumsep model (~167 MB) is cached under `models/drumsep/` (next to the exe when packaged) and kept between runs.
 
 
 
@@ -123,8 +123,8 @@ The [Preview Kit](Preview%20Kit/) uses post-remap GGD Modern & Massive GM note n
 
 | Step                                    | Typical duration (~30s clip)       |
 | --------------------------------------- | ---------------------------------- |
-| First Convert (includes model download) | 15–50s on CPU + one-time ~167 MB download; much faster on GPU |
-| Subsequent Converts                     | ~15–50s on CPU; typically well under a minute on GPU |
+| First Convert (includes model download) | One-time ~167 MB download (shown in the progress status) + separation; can take a few minutes on a cold machine / slow network, then much faster on GPU |
+| Subsequent Converts                     | ~15–50s on CPU; often ~10s on GPU once the model is cached |
 | Sensitivity re-run                      | < 1s                               |
 | Merge + remap                           | < 2s                               |
 
@@ -138,8 +138,10 @@ AudioToMidi/
 ├── app/
 │   ├── main.py                  # PySide6 entry point; startup temp cleanup
 │   ├── controller.py            # Wires UI to pipeline stages
+│   ├── log_buffer.py            # In-memory debug log ring buffer
 │   └── ui/
 │       ├── main_window.py       # Main window, controls, progress
+│       ├── debug_log_dialog.py  # Help → View debug log
 │       └── waveform_view.py     # pyqtgraph onset review widget
 ├── pipeline/
 │   ├── preprocess.py            # Resample, normalize, mono/stereo handling

@@ -216,7 +216,33 @@ class PipelineController(QObject):
 
         def job(report: Callable[[str, int], None]) -> AnalysisState:
             report(_separation_progress_message(self._device), 5)
-            separate(wav_path, stems_dir, device=self._device)
+
+            def on_checkpoint_progress(downloaded: int, total: Optional[int]) -> None:
+                if total and total > 0:
+                    # Reserve 5–40% of the bar for the one-time model download.
+                    pct = 5 + int(35 * min(1.0, downloaded / total))
+                    mb = downloaded >> 20
+                    total_mb = total >> 20
+                    if downloaded >= total:
+                        report(_separation_progress_message(self._device), max(pct, 40))
+                        return
+                    report(
+                        f"Downloading model… {mb}/{total_mb} MB",
+                        pct,
+                    )
+                else:
+                    mb = downloaded >> 20
+                    report(
+                        f"Downloading model… {mb} MB",
+                        10,
+                    )
+
+            separate(
+                wav_path,
+                stems_dir,
+                device=self._device,
+                on_checkpoint_progress=on_checkpoint_progress,
+            )
             report("Detecting onsets...", 80)
             events, summary = transcribe_stems(
                 stems_dir,

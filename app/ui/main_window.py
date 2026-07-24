@@ -7,11 +7,10 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import QElapsedTimer, Qt, QTimer
-from PySide6.QtGui import QShowEvent
+from PySide6.QtGui import QAction, QShowEvent
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
-    QDoubleSpinBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -22,6 +21,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSlider,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -31,6 +31,8 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from app.controller import PipelineController  # noqa: E402
+from app.log_buffer import get_log_buffer  # noqa: E402
+from app.ui.debug_log_dialog import DebugLogDialog  # noqa: E402
 from app.ui.theme import app_stylesheet  # noqa: E402
 from app.ui.waveform_view import WaveformView  # noqa: E402
 from pipeline.remap import available_profiles, load_profile  # noqa: E402
@@ -44,8 +46,9 @@ _SCALE_FEWER = 2.0
 _SCALE_DEFAULT = 1.0
 _SCALE_MORE = 0.25
 _RAIL_WIDTH = 280
-_STAGE_MIN_WIDTH = 520
+_STAGE_MIN_WIDTH = 964  # ~1280px total with rail + margins
 _WINDOW_CHROME_PAD_H = 48
+_DEFAULT_WINDOW_WIDTH = 1280
 
 
 def _slider_to_scale(value: int) -> float:
@@ -82,9 +85,20 @@ class MainWindow(QMainWindow):
         self._elapsed_timer.timeout.connect(self._tick_elapsed)
 
         self._build_ui()
+        self._build_menu()
         self._connect_controller()
         self._populate_plugins()
         self._set_session_meta("Load a drum stem to begin")
+
+    def _build_menu(self) -> None:
+        help_menu = self.menuBar().addMenu("&Help")
+        self._view_debug_log_action = QAction("View debug log…", self)
+        self._view_debug_log_action.triggered.connect(self._on_view_debug_log)
+        help_menu.addAction(self._view_debug_log_action)
+
+    def _on_view_debug_log(self) -> None:
+        dialog = DebugLogDialog(self)
+        dialog.exec()
 
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
@@ -105,7 +119,10 @@ class MainWindow(QMainWindow):
 
         rail_h = self._rail_body.sizeHint().height()
         win_h = rail_h + margin_h + _WINDOW_CHROME_PAD_H
-        win_w = _RAIL_WIDTH + _STAGE_MIN_WIDTH + margin_w + spacing
+        win_w = max(
+            _DEFAULT_WINDOW_WIDTH,
+            _RAIL_WIDTH + _STAGE_MIN_WIDTH + margin_w + spacing,
+        )
 
         screen = self.screen() or QApplication.primaryScreen()
         if screen is not None:
@@ -113,7 +130,7 @@ class MainWindow(QMainWindow):
             win_w = min(win_w, avail.width())
             win_h = min(win_h, avail.height())
 
-        self.setMinimumSize(min(win_w, 900), min(win_h, 560))
+        self.setMinimumSize(min(win_w, 1000), min(win_h, 560))
         self.resize(win_w, win_h)
 
         if self._rail_scroll is not None:
@@ -223,6 +240,11 @@ class MainWindow(QMainWindow):
         progress_row.addWidget(self.elapsed_label)
         layout.addLayout(progress_row)
 
+        self.status_label = QLabel("Load a WAV and pick a plugin to begin.", body)
+        self.status_label.setObjectName("statusLabel")
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
+
         layout.addWidget(_section_label("Review", body))
 
         sens_header = QHBoxLayout()
@@ -250,11 +272,10 @@ class MainWindow(QMainWindow):
         bpm_label = QLabel("BPM", body)
         bpm_label.setObjectName("statusLabel")
         bpm_row.addWidget(bpm_label)
-        self.bpm_spin = QDoubleSpinBox(body)
-        self.bpm_spin.setRange(40.0, 240.0)
-        self.bpm_spin.setDecimals(1)
-        self.bpm_spin.setSingleStep(0.1)
-        self.bpm_spin.setValue(120.0)
+        self.bpm_spin = QSpinBox(body)
+        self.bpm_spin.setRange(40, 240)
+        self.bpm_spin.setSingleStep(1)
+        self.bpm_spin.setValue(120)
         self.bpm_spin.setEnabled(False)
         self.bpm_spin.setToolTip(
             "Tempo stamped into the MIDI file. Must match your DAW project BPM so "
@@ -314,11 +335,6 @@ class MainWindow(QMainWindow):
         self.clear_btn.setToolTip("Stop playback and clear the loaded WAV and analysis.")
         self.clear_btn.clicked.connect(self._on_clear_all)
         layout.addWidget(self.clear_btn)
-
-        self.status_label = QLabel("Load a WAV and pick a plugin to begin.", body)
-        self.status_label.setObjectName("statusLabel")
-        self.status_label.setWordWrap(True)
-        layout.addWidget(self.status_label)
 
         scroll.setWidget(body)
         outer.addWidget(scroll)
@@ -493,6 +509,7 @@ class MainWindow(QMainWindow):
     def _on_progress(self, message: str, percent: int) -> None:
         self.status_label.setText(message)
         self.progress_bar.setValue(percent)
+        get_log_buffer().append(f"[{percent}%] {message}")
 
     def _on_analysis_finished(self, state: object) -> None:
         self._elapsed_timer.stop()
@@ -502,17 +519,17 @@ class MainWindow(QMainWindow):
         self.save_btn.setEnabled(True)
         self.sensitivity_slider.setEnabled(True)
         self.bpm_spin.blockSignals(True)
-        self.bpm_spin.setValue(float(getattr(state, "detected_bpm", 120.0)))
+        self.bpm_spin.setValue(int(round(float(getattr(state, "detected_bpm", 120.0)))))
         self.bpm_spin.blockSignals(False)
         self.bpm_spin.setEnabled(True)
         self.waveform.set_waveform(state.wav_path)
         self.waveform.set_events(state.events)
         self._update_preview_controls()
-        bpm = float(self.bpm_spin.value())
+        bpm = int(self.bpm_spin.value())
         n = len(state.events)
-        self._set_session_meta(f"{n} hits · ~{bpm:0.1f} BPM")
+        self._set_session_meta(f"{n} hits · {bpm} BPM")
         self.status_label.setText(
-            f"Detected {n} events · BPM ~{bpm:0.1f} (editable). "
+            f"Detected {n} events · BPM {bpm} (editable). "
             "Review, then Play or Save MIDI."
         )
 
@@ -521,6 +538,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         self._set_busy(False)
         self.status_label.setText(f"Analysis failed: {error}")
+        get_log_buffer().append(f"ERROR analysis: {error}")
 
     def _on_events_updated(self, events: object) -> None:
         self._set_busy(False, keep_save=True)
@@ -528,8 +546,8 @@ class MainWindow(QMainWindow):
         self.save_btn.setEnabled(True)
         self.waveform.set_events(events)
         self._update_preview_controls()
-        bpm = float(self.bpm_spin.value())
-        self._set_session_meta(f"{len(events)} hits · ~{bpm:0.1f} BPM")
+        bpm = int(self.bpm_spin.value())
+        self._set_session_meta(f"{len(events)} hits · {bpm} BPM")
         self.status_label.setText(f"Detected {len(events)} events after tuning.")
 
     def _on_export_finished(self, path: str) -> None:
@@ -576,7 +594,7 @@ class MainWindow(QMainWindow):
         self.save_btn.setEnabled(False)
         self.sensitivity_slider.setEnabled(False)
         self.bpm_spin.blockSignals(True)
-        self.bpm_spin.setValue(120.0)
+        self.bpm_spin.setValue(120)
         self.bpm_spin.blockSignals(False)
         self.bpm_spin.setEnabled(False)
         self._update_preview_controls()

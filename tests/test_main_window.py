@@ -37,5 +37,26 @@ def test_main_window_constructs_hitmap_shell(qapp) -> None:
     assert win.source_combo.objectName() == "previewCombo"
     assert win.clear_btn is not None
     win.show()
-    assert win.width() >= 900
+    qapp.processEvents()
+    screen = win.screen() or qapp.primaryScreen()
+    avail_w = screen.availableGeometry().width() if screen is not None else 1280
+    assert win.width() >= min(1000, avail_w)
+    win.close()
+
+
+def test_bpm_spin_is_integer_only(qapp) -> None:
+    from PySide6.QtWidgets import QSpinBox
+
+    win = MainWindow()
+    assert isinstance(win.bpm_spin, QSpinBox)
+    assert win.bpm_spin.minimum() == 40
+    assert win.bpm_spin.maximum() == 240
+    win.bpm_spin.setValue(84)
+    assert win.bpm_spin.value() == 84
+    win.close()
+
+
+def test_help_menu_opens_debug_log_action(qapp) -> None:
+    win = MainWindow()
+    assert "debug log" in win._view_debug_log_action.text().lower()
     win.close()

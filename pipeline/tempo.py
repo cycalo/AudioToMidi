@@ -23,18 +23,19 @@ MAX_BPM = 240.0
 
 
 def normalize_bpm(bpm: float, *, default: float = DEFAULT_BPM) -> float:
-    """Clamp and sanitize a user- or detector-provided BPM."""
+    """Clamp, round to a whole number, and sanitize a BPM value."""
     try:
         value = float(bpm)
     except (TypeError, ValueError):
         return float(default)
     if not math.isfinite(value) or value <= 0:
         return float(default)
-    return float(max(MIN_BPM, min(MAX_BPM, value)))
+    clamped = max(MIN_BPM, min(MAX_BPM, value))
+    return float(int(round(clamped)))
 
 
 def estimate_bpm(audio_path: PathLike, *, sr: Optional[int] = None) -> float:
-    """Return estimated tempo in BPM (clamped). Falls back to 120 on failure."""
+    """Return estimated tempo in whole BPM. Falls back to 120 on failure."""
     path = Path(audio_path)
     if not path.is_file():
         return DEFAULT_BPM
@@ -45,7 +46,6 @@ def estimate_bpm(audio_path: PathLike, *, sr: Optional[int] = None) -> float:
         tempo, _beats = librosa.beat.beat_track(y=y, sr=loaded_sr)
         # librosa may return a scalar or a length-1 ndarray depending on version.
         raw = float(np.atleast_1d(tempo)[0])
-        rounded = round(raw, 1)
-        return normalize_bpm(rounded)
+        return normalize_bpm(raw)
     except Exception:  # noqa: BLE001 - never fail Convert because of tempo
         return DEFAULT_BPM

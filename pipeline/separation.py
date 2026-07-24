@@ -27,7 +27,7 @@ import os
 import sys
 import urllib.request
 from pathlib import Path
-from typing import Dict, Optional, Sequence
+from typing import Callable, Dict, Optional, Sequence
 
 import librosa
 import numpy as np
@@ -125,12 +125,20 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def ensure_checkpoint(*, verify: bool = True) -> Path:
+def ensure_checkpoint(
+    *,
+    verify: bool = True,
+    on_progress: Optional[Callable[[int, Optional[int]], None]] = None,
+) -> Path:
     """Download and cache the drumsep checkpoint, returning its local path.
 
     Downloads only on first use (into ``models/drumsep/49469ca8.th``) and verifies
     the SHA-256 unless ``verify=False``. The download URL can be overridden with
     the ``AUDIOTOMIDI_DRUMSEP_URL`` environment variable.
+
+    ``on_progress(downloaded_bytes, total_bytes_or_None)`` is invoked during
+    download when provided (skipped entirely when the checkpoint is already
+    cached and valid).
     """
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     dest = MODELS_DIR / DRUMSEP_FILENAME
@@ -148,12 +156,17 @@ def ensure_checkpoint(*, verify: bool = True) -> Path:
     )
     request = urllib.request.Request(DRUMSEP_URL, headers={"User-Agent": "AudioToMidi/0.2"})
     with urllib.request.urlopen(request) as response, open(tmp, "wb") as out:
-        total = int(response.headers.get("Content-Length", 0))
+        total_header = response.headers.get("Content-Length")
+        total = int(total_header) if total_header else None
         downloaded = 0
         next_report = 10 * (1 << 20)
+        if on_progress is not None:
+            on_progress(0, total)
         for chunk in iter(lambda: response.read(1 << 20), b""):
             out.write(chunk)
             downloaded += len(chunk)
+            if on_progress is not None:
+                on_progress(downloaded, total)
             if downloaded >= next_report:
                 pct = f" ({downloaded * 100 // total}%)" if total else ""
                 print(f"  {downloaded >> 20} MB{pct}", file=sys.stderr)
@@ -204,13 +217,14 @@ def _separate_demucs(
     device: str,
     shifts: int,
     overlap: float,
+    on_checkpoint_progress: Optional[Callable[[int, Optional[int]], None]] = None,
 ) -> Dict[str, Path]:
     import torch
     from demucs_infer.apply import apply_model
     from demucs_infer.audio import convert_audio
     from demucs_infer.pretrained import get_model
 
-    ensure_checkpoint()
+    ensure_checkpoint(on_progress=on_checkpoint_progress)
     model = get_model(DRUMSEP_SIGNATURE, repo=MODELS_DIR)
     model.to(device)
     model.eval()
@@ -347,6 +361,7 @@ def separate(
     device: str = "auto",
     shifts: int = 0,
     overlap: float = 0.25,
+    on_checkpoint_progress: Optional[Callable[[int, Optional[int]], None]] = None,
 ) -> dict:
     """Separate a full-kit drum WAV into per-voice stems.
 
@@ -358,6 +373,8 @@ def separate(
         device: ``"auto"``, ``"cpu"``, or ``"cuda"`` (demucs backend only).
         shifts: Demucs shift-trick averaging count (0 = fastest).
         overlap: Demucs segment overlap fraction.
+        on_checkpoint_progress: Optional callback for drumsep model download
+            progress ``(downloaded_bytes, total_bytes_or_None)``.
 
     Returns:
         A manifest dict: ``{"backend", "device", "sample_rate", "source",
@@ -370,7 +387,12 @@ def separate(
     if backend == "demucs":
         resolved_device = resolve_device(device)
         stems = _separate_demucs(
-            input_path, out_path, device=resolved_device, shifts=shifts, overlap=overlap
+            input_path,
+            out_path,
+            device=resolved_device,
+            shifts=shifts,
+            overlap=overlap,
+            on_checkpoint_progress=on_checkpoint_progress,
         )
         stems["hihat"] = _write_hihat_stem(input_path, out_path)
     elif backend == "dsp":

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import multiprocessing
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -17,6 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from app.log_buffer import get_log_buffer, install_logging  # noqa: E402
 from app.ui.main_window import MainWindow  # noqa: E402
 
 STEM_TEMP_PREFIX = "audiotomidi_"
@@ -33,6 +36,30 @@ def ensure_stdio() -> None:
         sys.stdout = open(os.devnull, "w", encoding="utf-8", errors="replace")  # noqa: SIM115
     if sys.stderr is None:
         sys.stderr = open(os.devnull, "w", encoding="utf-8", errors="replace")  # noqa: SIM115
+
+
+def suppress_windows_console_windows() -> None:
+    """Reduce console flashes from child processes in frozen Windows builds.
+
+    Torch/Demucs may spawn helpers via ``subprocess``. OR-ing
+    ``CREATE_NO_WINDOW`` into ``Popen`` creation flags keeps those children
+    headless when the parent is a windowed (``console=False``) PyInstaller exe.
+    """
+    if sys.platform != "win32":
+        return
+    if not getattr(sys, "frozen", False):
+        return
+    try:
+        flags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000))
+        _orig_popen_init = subprocess.Popen.__init__
+
+        def _popen_init(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            kwargs["creationflags"] = int(kwargs.get("creationflags", 0)) | flags
+            return _orig_popen_init(self, *args, **kwargs)
+
+        subprocess.Popen.__init__ = _popen_init  # type: ignore[method-assign]
+    except Exception:  # noqa: BLE001 - never block app launch
+        get_log_buffer().append("console suppression: skipped (unavailable)")
 
 
 def cleanup_orphaned_stem_dirs(
@@ -79,8 +106,11 @@ def cleanup_orphaned_stem_dirs(
 
 def main() -> int:
     """Launch the application."""
+    multiprocessing.freeze_support()
     ensure_stdio()
-    cleanup_orphaned_stem_dirs()
+    suppress_windows_console_windows()
+    install_logging()
+    cleanup_orphaned_stem_dirs(log=get_log_buffer().append)
     app = QApplication(sys.argv)
     window = MainWindow()
     app.aboutToQuit.connect(window.controller.cleanup)

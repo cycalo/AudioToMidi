@@ -158,6 +158,47 @@ def test_device_options_includes_auto_and_cpu() -> None:
         assert values.index("cuda") == 2
 
 
+def test_ensure_checkpoint_reports_download_progress(tmp_path: Path, monkeypatch) -> None:
+    import hashlib
+    import io
+    from pipeline import separation as sep
+
+    payload = b"x" * (3 * 1024 * 1024)  # 3 MiB so progress fires at least once
+    digest = hashlib.sha256(payload).hexdigest()
+    models_dir = tmp_path / "models" / "drumsep"
+    monkeypatch.setattr(sep, "MODELS_DIR", models_dir)
+    monkeypatch.setattr(sep, "DRUMSEP_SHA256", digest)
+    monkeypatch.setattr(sep, "DRUMSEP_URL", "https://example.test/model.th")
+
+    class _Resp:
+        headers = {"Content-Length": str(len(payload))}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, n: int = -1) -> bytes:
+            if not hasattr(self, "_buf"):
+                self._buf = io.BytesIO(payload)
+            return self._buf.read(n)
+
+    monkeypatch.setattr(sep.urllib.request, "urlopen", lambda *a, **k: _Resp())
+
+    reports: list[tuple[int, int | None]] = []
+
+    def on_progress(downloaded: int, total: int | None) -> None:
+        reports.append((downloaded, total))
+
+    dest = sep.ensure_checkpoint(on_progress=on_progress)
+    assert dest.is_file()
+    assert dest.read_bytes() == payload
+    assert reports, "expected at least one progress callback"
+    assert reports[-1][0] == len(payload)
+    assert all(total == len(payload) for _downloaded, total in reports)
+
+
 # --------------------------------------------------------------------------
 # Real-fixture structural checks (skip when no real stem is present)
 # --------------------------------------------------------------------------
