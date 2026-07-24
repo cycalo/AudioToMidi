@@ -17,11 +17,13 @@ python -m venv .venv
 
 **Activate the venv** (pick the shell you use):
 
-| Shell | Activate |
-| ----- | -------- |
+
+| Shell                | Activate                        |
+| -------------------- | ------------------------------- |
 | **Git Bash / MINGW** | `source .venv/Scripts/activate` |
-| **PowerShell** | `.\.venv\Scripts\Activate.ps1` |
-| **cmd.exe** | `.venv\Scripts\activate.bat` |
+| **PowerShell**       | `.\.venv\Scripts\Activate.ps1`  |
+| **cmd.exe**          | `.venv\Scripts\activate.bat`    |
+
 
 Then:
 
@@ -42,6 +44,8 @@ That opens the GUI. First Convert may download the Demucs checkpoint (~167 MB). 
 **Tip:** Keep the venv activated (`(.venv)` in the prompt) whenever you run the app from source.
 
 ---
+
+
 
 ## 2. Build the Windows exe
 
